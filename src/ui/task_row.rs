@@ -16,6 +16,7 @@ pub struct RowOpts<'a> {
     pub multi_checked: bool,
     pub selected: bool,
     pub show_line_num: bool,
+    pub show_created_dates: bool,
     pub match_term: Option<&'a str>,
     pub today: &'a str,
     /// `key:value` tokens whose key is in this list are omitted from the
@@ -80,6 +81,14 @@ fn build_row<'a>(task: &'a Task, opts: RowOpts<'a>, theme: &Theme) -> (Line<'a>,
         ));
     } else {
         spans.push(Span::raw("    "));
+    }
+
+    if opts.show_created_dates {
+        spans.push(Span::styled(
+            task.created_date.as_deref().unwrap_or("          "),
+            Style::default().fg(if opts.cursor { theme.fg } else { theme.dim }),
+        ));
+        spans.push(Span::raw(" "));
     }
 
     let gutter = spans.len();
@@ -536,6 +545,7 @@ mod tests {
             multi_checked: false,
             selected: false,
             show_line_num: false,
+            show_created_dates: false,
             match_term: Some("a"),
             today: "2026-05-06",
             hidden_keys: &[],
@@ -557,6 +567,7 @@ mod tests {
             multi_checked: false,
             selected: false,
             show_line_num: false,
+            show_created_dates: false,
             match_term: Some("cade"),
             today: "2026-05-06",
             hidden_keys: &[],
@@ -585,6 +596,7 @@ mod tests {
             multi_checked: false,
             selected: false,
             show_line_num: false,
+            show_created_dates: false,
             match_term: None,
             today: "2026-05-06",
             hidden_keys: hidden,
@@ -652,6 +664,7 @@ mod tests {
             multi_checked: false,
             selected: false,
             show_line_num: false,
+            show_created_dates: false,
             match_term: None,
             today: "2026-05-06",
             hidden_keys: &[],
@@ -683,6 +696,7 @@ mod tests {
             multi_checked: false,
             selected: false,
             show_line_num: false,
+            show_created_dates: false,
             match_term: None,
             today: "2026-05-06",
             hidden_keys: &[],

@@ -11,6 +11,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 use std::io::Write;
 
 use tuxedo::action::{Action, RecAction};
+use tuxedo::app::palette::{TaskJump, task_jump};
 use tuxedo::app::{AddOutcome, App, CalendarTarget, DialogInputMode, Mode, OverlayKind, View};
 use tuxedo::cli;
 use tuxedo::config::Config;
@@ -336,6 +337,7 @@ fn handle_key(app: &mut App, key: KeyEvent, keybinds: &KeyBindings) {
     // file is reloaded, the keystroke is consumed (re-press to act on the
     // new state), and the per-mutator checks become no-ops downstream.
     if !app.check_external_changes() {
+        app.task_jump_digits.clear();
         return;
     }
     match app.mode {
@@ -758,7 +760,7 @@ fn handle_insert_calendar(app: &mut App, key: KeyEvent) {
 
 fn handle_insert_rec_builder(app: &mut App, key: KeyEvent, keybinds: &KeyBindings) {
     // Custom `[recurrence]` bindings win over the built-ins, matching how
-    // `[normal]` is layered in `resolve_normal_key`.
+    // `[normal]` is layered in `handle_normal`.
     if let Some(action) = keybinds.resolve_recurrence(key) {
         apply_rec_action(app, action);
         return;
@@ -840,6 +842,7 @@ fn handle_settings(app: &mut App, key: KeyEvent) {
         KeyCode::Char('T') => apply_action(app, Action::CycleTheme),
         KeyCode::Char('D') => apply_action(app, Action::CycleDensity),
         KeyCode::Char('L') => apply_action(app, Action::ToggleLineNum),
+        KeyCode::Char('C') => apply_action(app, Action::ToggleCreatedDates),
         KeyCode::Char('[') => apply_action(app, Action::ToggleLeftPane),
         KeyCode::Char(']') => apply_action(app, Action::ToggleRightPane),
         KeyCode::Char('H') => apply_action(app, Action::ToggleShowDone),
@@ -886,6 +889,10 @@ fn handle_command_palette(app: &mut App, key: KeyEvent) {
             return;
         }
         KeyCode::Enter => {
+            let jump = task_jump(app.draft.text(), app.visible_indices().len());
+            if matches!(jump, Some(TaskJump::OutOfRange)) {
+                return;
+            }
             let chosen = app.command_palette.current_action();
             // Restore the prior mode (Normal or Visual) *before* dispatching
             // so visual-aware actions (ToggleComplete, Delete, ToggleSelected)
@@ -893,7 +900,9 @@ fn handle_command_palette(app: &mut App, key: KeyEvent) {
             // mode (BeginAdd → Insert, etc.); we don't stomp it after.
             app.mode = app.command_palette.take_prior();
             app.draft_clear();
-            if let Some(action) = chosen {
+            if let Some(TaskJump::Row(row)) = jump {
+                app.jump_to_task_row(row);
+            } else if let Some(action) = chosen {
                 apply_action(app, action);
             }
             return;
@@ -1000,13 +1009,7 @@ fn handle_prompt(app: &mut App, key: KeyEvent) {
 ///
 /// Mutates the chord state because chord progress is part of interpreting
 /// the key, not a separate concern.
-fn resolve_normal_key(app: &mut App, key: KeyEvent, keybinds: &KeyBindings) -> Option<Action> {
-    match keybinds.resolve_normal(key, &mut app.chord) {
-        Some(ResolvedKey::Action(action)) => return Some(action),
-        Some(ResolvedKey::Pending) => return None,
-        None => {}
-    }
-
+fn resolve_normal_key(app: &mut App, key: KeyEvent) -> Option<Action> {
     if is_exit_key(key) {
         return Some(Action::Quit);
     }
@@ -1023,6 +1026,8 @@ fn resolve_normal_key(app: &mut App, key: KeyEvent, keybinds: &KeyBindings) -> O
     Some(match key.code {
         KeyCode::Char('j') | KeyCode::Down => Action::CursorDown,
         KeyCode::Char('k') | KeyCode::Up => Action::CursorUp,
+        KeyCode::PageDown => Action::PageDown,
+        KeyCode::PageUp => Action::PageUp,
         KeyCode::Char('J') => Action::MoveTaskDown,
         KeyCode::Char('K') => Action::MoveTaskUp,
         KeyCode::Char('G') => Action::CursorBottom,
@@ -1031,6 +1036,7 @@ fn resolve_normal_key(app: &mut App, key: KeyEvent, keybinds: &KeyBindings) -> O
         KeyCode::Char('n') => Action::BeginAdd,
         KeyCode::Char('r') => Action::Reschedule,
         KeyCode::Char('a') => Action::ToggleArchiveView,
+        KeyCode::Char('X') => Action::ToggleCompletedView,
         KeyCode::Char('l') => Action::GoList,
         KeyCode::Char('e') => Action::BeginEdit,
         KeyCode::Char('i') => Action::BeginEditInsert,
@@ -1091,6 +1097,7 @@ fn resolve_normal_key(app: &mut App, key: KeyEvent, keybinds: &KeyBindings) -> O
         KeyCode::Char('T') => Action::OpenThemePicker,
         KeyCode::Char('D') => Action::CycleDensity,
         KeyCode::Char('L') => Action::ToggleLineNum,
+        KeyCode::Char('C') => Action::ToggleCreatedDates,
         KeyCode::Char('w') => Action::ToggleWrapRows,
         KeyCode::Char('H') => Action::ToggleShowDone,
         KeyCode::Char('F') => Action::ToggleShowFuture,
@@ -1101,28 +1108,27 @@ fn resolve_normal_key(app: &mut App, key: KeyEvent, keybinds: &KeyBindings) -> O
 }
 
 fn apply_action(app: &mut App, action: Action) {
-    // Archive view is read-only with two exceptions: `x` un-archives the
-    // row at the cursor, `dd` permanently removes it from done.txt. Other
-    // mutating actions flash a hint and abort. Navigation, view-switch,
-    // theme/density/layout toggles, and overlays (help/settings) fall
-    // through to the normal handler below.
-    if app.view() == View::Archive {
+    let view = app.view();
+    if view != View::List {
         match action {
-            Action::ToggleComplete => {
+            Action::ToggleComplete if view == View::Archive => {
                 if let Some(idx) = app.cur_abs() {
                     app.unarchive(idx);
                 }
                 return;
             }
-            Action::Delete => {
+            Action::Delete if view == View::Archive => {
                 if let Some(idx) = app.cur_abs() {
                     app.archive_delete(idx);
                 }
                 return;
             }
-            Action::BeginAdd
+            Action::ToggleComplete
+            | Action::Delete
+            | Action::BeginAdd
             | Action::BeginEdit
             | Action::BeginEditInsert
+            | Action::Reschedule
             | Action::CyclePriority
             | Action::MoveTaskDown
             | Action::MoveTaskUp
@@ -1139,7 +1145,15 @@ fn apply_action(app: &mut App, action: Action) {
             | Action::ToggleShowDone
             | Action::ToggleShowFuture
             | Action::Undo => {
-                app.flash("read-only in archive");
+                app.flash(if view == View::Archive {
+                    "read-only in archive"
+                } else {
+                    "read-only in completed view"
+                });
+                return;
+            }
+            Action::ArchiveCompleted | Action::CreateOrOpenNote if view == View::Completed => {
+                app.flash("read-only in completed view");
                 return;
             }
             _ => {}
@@ -1154,8 +1168,12 @@ fn apply_action(app: &mut App, action: Action) {
             }
         }
         Action::CursorUp => app.cursor = app.cursor.saturating_sub(1),
-        Action::CursorTop => app.cursor = 0,
+        Action::CursorTop => {
+            app.cursor = 0;
+            app.follow_task_cursor();
+        }
         Action::CursorBottom => {
+            app.follow_task_cursor();
             if len > 0 {
                 app.cursor = len - 1;
             }
@@ -1164,6 +1182,8 @@ fn apply_action(app: &mut App, action: Action) {
             app.cursor = (app.cursor + 10).min(len.saturating_sub(1));
         }
         Action::HalfPageUp => app.cursor = app.cursor.saturating_sub(10),
+        Action::PageDown => app.page_tasks(true),
+        Action::PageUp => app.page_tasks(false),
         Action::BeginAdd => {
             app.mode = Mode::Insert;
             // Seed from the active filter: a task added under `+work` almost
@@ -1253,6 +1273,13 @@ fn apply_action(app: &mut App, action: Action) {
             };
             app.set_view(next);
         }
+        Action::ToggleCompletedView => {
+            app.set_view(if view == View::Completed {
+                View::List
+            } else {
+                View::Completed
+            });
+        }
         Action::ArchiveCompleted => {
             if app.view() == View::Archive {
                 app.flash("already in archive");
@@ -1297,6 +1324,10 @@ fn apply_action(app: &mut App, action: Action) {
             app.prefs.toggle_line_num();
             app.save_prefs();
         }
+        Action::ToggleCreatedDates => {
+            app.prefs.show_created_dates = !app.prefs.show_created_dates;
+            app.save_prefs();
+        }
         Action::ToggleWrapRows => {
             app.prefs.wrap_rows = !app.prefs.wrap_rows;
             app.save_prefs();
@@ -1338,7 +1369,9 @@ fn apply_action(app: &mut App, action: Action) {
         Action::EscapeStack => {
             let has_pc = app.filter().project.is_some() || app.filter().context.is_some();
             let has_search = !app.filter().search.is_empty();
-            if has_pc {
+            if view == View::Completed {
+                app.set_view(View::List);
+            } else if has_pc {
                 app.set_project_filter(None);
                 app.set_context_filter(None);
             } else if has_search {
@@ -1374,7 +1407,49 @@ fn apply_action(app: &mut App, action: Action) {
 }
 
 fn handle_normal(app: &mut App, key: KeyEvent, keybinds: &KeyBindings) {
-    if let Some(action) = resolve_normal_key(app, key, keybinds) {
+    let plain_key = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
+    if !app.task_jump_digits.is_empty() {
+        match key.code {
+            KeyCode::Esc => {
+                app.task_jump_digits.clear();
+                return;
+            }
+            KeyCode::Char(';' | '；') if plain_key => {
+                let digits = std::mem::take(&mut app.task_jump_digits);
+                match task_jump(&digits, app.visible_indices().len()) {
+                    Some(TaskJump::Row(row)) => app.jump_to_task_row(row),
+                    Some(TaskJump::OutOfRange) => app.flash("task number out of range"),
+                    None => {}
+                }
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    let action = match keybinds.resolve_normal(key, &mut app.chord) {
+        Some(ResolvedKey::Action(action)) => Some(action),
+        Some(ResolvedKey::Pending) => None,
+        None => {
+            if app.mode == Mode::Normal && plain_key {
+                let digit = match key.code {
+                    KeyCode::Char(c @ '0'..='9') => Some(c),
+                    KeyCode::Char(c @ '０'..='９') => {
+                        Some(char::from(b'0' + (c as u32 - '０' as u32) as u8))
+                    }
+                    _ => None,
+                };
+                if let Some(digit) = digit {
+                    app.chord.clear();
+                    app.task_jump_digits.push(digit);
+                    return;
+                }
+            }
+            resolve_normal_key(app, key)
+        }
+    };
+    app.task_jump_digits.clear();
+    if let Some(action) = action {
         apply_action(app, action);
     }
     app.clamp_cursor();
@@ -1441,7 +1516,7 @@ mod tests {
     }
 
     fn resolve(app: &mut App, key: KeyEvent) -> Option<Action> {
-        resolve_normal_key(app, key, &KeyBindings::default())
+        resolve_normal_key(app, key)
     }
 
     fn task_lines(app: &App) -> Vec<&str> {
@@ -1529,6 +1604,11 @@ mod tests {
             app.prefs.show_done, show_done_before,
             "`H` must toggle show-done, per the settings screen's own hint"
         );
+        assert_eq!(app.mode, Mode::Settings);
+
+        let show_created_dates_before = app.prefs.show_created_dates;
+        handle_settings(&mut app, key('C'));
+        assert_ne!(app.prefs.show_created_dates, show_created_dates_before);
         assert_eq!(app.mode, Mode::Settings);
 
         handle_settings(&mut app, key('q'));
@@ -1641,37 +1721,216 @@ mod tests {
     }
 
     #[test]
+    fn uppercase_x_opens_read_only_completed_view() {
+        let mut app = build_app();
+        let first = app.cur_task_index_in_tasks().expect("live task");
+        apply_action(&mut app, Action::ToggleComplete);
+        let completed = app.tasks()[first].raw.clone();
+        assert_eq!(app.tasks()[first].done_date.as_deref(), Some(app.today()));
+
+        app.set_search("unmatched".into());
+        let show = resolve(&mut app, key('X')).expect("completed view key");
+        assert_eq!(show, Action::ToggleCompletedView);
+        apply_action(&mut app, show);
+        assert_eq!(app.view(), View::Completed);
+        assert_eq!(app.cur_task().map(|task| &task.raw), Some(&completed));
+        apply_action(&mut app, Action::ToggleComplete);
+        apply_action(&mut app, Action::Delete);
+        apply_action(&mut app, Action::ArchiveCompleted);
+        apply_action(&mut app, Action::Reschedule);
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.tasks()[first].raw, completed);
+
+        apply_action(&mut app, show);
+        assert_eq!(app.view(), View::List);
+        apply_action(&mut app, show);
+        apply_action(&mut app, Action::EscapeStack);
+        assert_eq!(app.view(), View::List);
+        assert_eq!(app.filter().search, "unmatched");
+    }
+
+    #[test]
+    fn numeric_command_jumps_in_filtered_display_order() {
+        let tasks = "(C) other\n(B) second +work\n(A) first +work\n";
+        let mut app = build_app_with_archive(tasks, None);
+        app.prefs.sort = Sort::Priority;
+        app.set_project_filter(Some("work".into()));
+        assert_eq!(app.visible_indices(), [2, 1]);
+
+        let keys = KeyBindings::default();
+        for open in [key(':'), ctrl('p')] {
+            app.cursor = 0;
+            handle_key(&mut app, open, &keys);
+            assert_eq!(app.mode, Mode::CommandPalette);
+            handle_key(&mut app, key('2'), &keys);
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &keys,
+            );
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(app.cur_abs(), Some(1));
+        }
+
+        apply_action(&mut app, Action::OpenCommandPalette);
+        for invalid in ["0", "3", "99999999999999999999999999999999999999"] {
+            app.draft_set(invalid.into());
+            handle_command_palette(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            assert_eq!(app.mode, Mode::CommandPalette);
+            assert_eq!(app.cur_abs(), Some(1));
+        }
+    }
+
+    #[test]
+    fn direct_task_jump_scrolls_to_the_filtered_display_row() {
+        let mut tasks = "(B) target-row +work\n(A) ignored\n".to_string();
+        for n in 0..11 {
+            tasks.push_str(&format!("(A) earlier-row-{n} +work\n"));
+        }
+        let mut app = build_app_with_archive(&tasks, None);
+        app.prefs.sort = Sort::Priority;
+        app.set_project_filter(Some("work".into()));
+        assert_eq!(app.visible_indices().len(), 12);
+        assert_eq!(app.visible_indices()[11], 0);
+
+        let keys = KeyBindings::default();
+        let backend = ratatui::backend::TestBackend::new(88, 10);
+        let mut terminal = ratatui::Terminal::new(backend).expect("test terminal");
+        for sequence in ["12;", "12；", "１２；", "１２;"] {
+            handle_key(&mut app, key('g'), &keys);
+            handle_key(&mut app, key('g'), &keys);
+            let render = |terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+                          app: &App| {
+                terminal.draw(|frame| ui::draw(frame, app)).unwrap();
+                terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+            };
+            assert!(!render(&mut terminal, &app).contains("target-row"));
+            let mut characters = sequence.chars();
+            let confirm = characters.next_back().unwrap();
+            for digit in characters {
+                handle_key(&mut app, key(digit), &keys);
+            }
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(app.cursor, 0);
+            assert!(app.draft.text().is_empty());
+            handle_key(&mut app, key(confirm), &keys);
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(app.cursor, 11);
+            assert_eq!(app.cur_abs(), Some(0));
+            assert!(render(&mut terminal, &app).contains("target-row"));
+        }
+    }
+
+    #[test]
+    fn direct_task_jump_cancels_and_reports_out_of_range() {
+        let mut app = build_app_with_archive("First +work\nSecond +work\nHidden\n", None);
+        app.set_project_filter(Some("work".into()));
+        let keys = KeyBindings::default();
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        handle_key(&mut app, key('2'), &keys);
+        handle_key(&mut app, esc, &keys);
+        for separator in [';', '；'] {
+            handle_key(&mut app, key(separator), &keys);
+            assert_eq!(app.cursor, 0);
+            assert_eq!(app.filter().project.as_deref(), Some("work"));
+            assert_eq!(app.flash_active(), None);
+        }
+
+        for sequence in ["0;", "３；", "9999999999999999999999999999999999999999;"] {
+            for c in sequence.chars() {
+                handle_key(&mut app, key(c), &keys);
+            }
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(app.cursor, 0);
+            assert_eq!(app.flash_active(), Some("task number out of range"));
+        }
+        for c in "2;".chars() {
+            handle_key(&mut app, key(c), &keys);
+        }
+        assert_eq!(app.cursor, 1);
+    }
+
+    #[test]
+    fn direct_task_jump_leaves_editing_and_search_input_unchanged() {
+        let mut app = build_app();
+        let keys = KeyBindings::default();
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+        for start in ['n', '/'] {
+            handle_key(&mut app, key('2'), &keys);
+            handle_key(&mut app, key(start), &keys);
+            for c in "1;２；".chars() {
+                handle_key(&mut app, key(c), &keys);
+            }
+            assert_eq!(app.draft.text(), "1;２；");
+            if start == 'n' {
+                assert_eq!(app.mode, Mode::Insert);
+                handle_key(&mut app, esc, &keys);
+            }
+            handle_key(&mut app, esc, &keys);
+            assert_eq!(app.mode, Mode::Normal);
+            handle_key(&mut app, key(';'), &keys);
+            assert_eq!(app.cursor, 0);
+        }
+    }
+
+    #[test]
+    fn page_keys_move_by_the_rendered_list_height() {
+        let cfg = Config {
+            sort: Some(tuxedo::app::Sort::File),
+            density: Some(tuxedo::app::Density::Compact),
+            show_left: Some(false),
+            show_right: Some(false),
+            ..Config::default()
+        };
+        let tasks: String = (0..20).map(|n| format!("Task {n}\n")).collect();
+        let mut app = App::new("todos.txt".into(), tasks, "2026-05-07".into(), cfg);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(48, 10))
+            .expect("test terminal");
+        let render = |terminal: &mut ratatui::Terminal<_>, app: &App| {
+            terminal
+                .draw(|frame| ui::draw(frame, app))
+                .expect("draw tasks");
+        };
+        let page_down = resolve(
+            &mut app,
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+        )
+        .expect("PageDown mapping");
+        let page_up = resolve(&mut app, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE))
+            .expect("PageUp mapping");
+        assert_eq!(page_down, Action::PageDown);
+        assert_eq!(page_up, Action::PageUp);
+
+        render(&mut terminal, &app);
+        apply_action(&mut app, page_down);
+        assert_eq!(app.cursor, 7);
+        render(&mut terminal, &app);
+        apply_action(&mut app, page_up);
+        assert_eq!(app.cursor, 0);
+    }
+
+    #[test]
     fn custom_keybinds_override_builtins() {
         let mut app = build_app();
         let keybinds = KeyBindings::parse("[normal]\nopen_help = \"q\"\n");
-        assert_eq!(
-            resolve_normal_key(&mut app, key('q'), &keybinds),
-            Some(Action::OpenHelp)
-        );
-        assert_eq!(
-            resolve_normal_key(&mut app, ctrl('d'), &keybinds),
-            Some(Action::HalfPageDown),
-        );
-        assert_eq!(
-            resolve_normal_key(&mut app, key('n'), &keybinds),
-            Some(Action::BeginAdd),
-        );
-        assert_eq!(
-            resolve_normal_key(&mut app, key('r'), &keybinds),
-            Some(Action::Reschedule),
-        );
-        assert_eq!(
-            resolve_normal_key(&mut app, key('a'), &keybinds),
-            Some(Action::ToggleArchiveView),
-        );
-        assert_eq!(
-            resolve_normal_key(&mut app, key('A'), &keybinds),
-            Some(Action::ArchiveCompleted),
-        );
-        assert_eq!(
-            resolve_normal_key(&mut app, key('S'), &keybinds),
-            Some(Action::CycleSort),
-        );
+        handle_normal(&mut app, key('q'), &keybinds);
+        assert_eq!(app.mode, Mode::Help);
+        assert!(!app.should_quit);
+        app.mode = Mode::Normal;
+        assert_eq!(resolve(&mut app, ctrl('d')), Some(Action::HalfPageDown),);
+        assert_eq!(resolve(&mut app, key('n')), Some(Action::BeginAdd),);
+        assert_eq!(resolve(&mut app, key('r')), Some(Action::Reschedule),);
+        assert_eq!(resolve(&mut app, key('a')), Some(Action::ToggleArchiveView),);
+        assert_eq!(resolve(&mut app, key('A')), Some(Action::ArchiveCompleted),);
+        assert_eq!(resolve(&mut app, key('S')), Some(Action::CycleSort),);
     }
 
     #[test]

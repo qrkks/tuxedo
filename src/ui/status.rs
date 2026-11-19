@@ -35,12 +35,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     };
     if matches!(app.view, View::Archive) {
         mode_label = "ARCHIVE".into();
+    } else if app.view == View::Completed && matches!(app.mode, Mode::Normal | Mode::Visual) {
+        mode_label = "COMPLETED".into();
     }
     if let Some(f) = app.flash_active() {
         mode_label = format!("{mode_label} · {f}").into();
     }
 
     let hint = match app.mode {
+        Mode::Normal | Mode::Visual if app.view == View::Completed => {
+            "j/k · PgUp/PgDn · X or Esc back · q quit"
+        }
         Mode::Insert => match app.draft.input_mode() {
             DialogInputMode::Normal => {
                 "h/l navigate · w/b/e word · i/a insert · Enter save · Esc cancel"
@@ -62,13 +67,19 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         _ => "j/k · n new · r reschedule · x done · / search · ? help · u undo · q quit",
     };
 
+    let pending_jump = (!app.task_jump_digits.is_empty())
+        .then(|| format!("Jump to {} · ; confirm · Esc cancel", app.task_jump_digits));
+    let hint = pending_jump.as_deref().unwrap_or(hint);
+
     let mut right_parts = Vec::new();
     if matches!(app.view, View::Archive) {
         right_parts.push(format!("{} archived", app.archive().len()));
+    } else if app.view == View::Completed {
+        right_parts.push(format!("{} completed", app.visible_indices().len()));
     } else {
         right_parts.push(format!("{} open", app.visible_indices().len()));
     }
-    if !app.selection.is_empty() {
+    if app.view != View::Completed && !app.selection.is_empty() {
         right_parts.push(format!("{} selected", app.selection.len()));
     }
     right_parts.push(app.today().to_string());

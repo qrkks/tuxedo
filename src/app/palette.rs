@@ -6,6 +6,26 @@ use super::types::Mode;
 use crate::action::Action;
 use crate::search::subseq_match_ci;
 
+#[derive(Clone, Copy)]
+pub enum TaskJump {
+    Row(usize),
+    OutOfRange,
+}
+
+/// A numeric command selects a one-based row in the active view.
+pub fn task_jump(input: &str, count: usize) -> Option<TaskJump> {
+    let input = input.trim();
+    if input.is_empty() || !input.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let row = input
+        .parse::<usize>()
+        .ok()
+        .and_then(|number| number.checked_sub(1))
+        .filter(|&row| row < count);
+    Some(row.map_or(TaskJump::OutOfRange, TaskJump::Row))
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct PaletteEntry {
     pub label: &'static str,
@@ -113,14 +133,24 @@ pub const ENTRIES: &[PaletteEntry] = &[
         action: Action::CursorBottom,
     },
     PaletteEntry {
-        label: "page down",
+        label: "jump down 10 tasks",
         keys: "Ctrl-d",
         action: Action::HalfPageDown,
     },
     PaletteEntry {
-        label: "page up",
+        label: "jump up 10 tasks",
         keys: "Ctrl-u",
         action: Action::HalfPageUp,
+    },
+    PaletteEntry {
+        label: "page down",
+        keys: "PgDn",
+        action: Action::PageDown,
+    },
+    PaletteEntry {
+        label: "page up",
+        keys: "PgUp",
+        action: Action::PageUp,
     },
     PaletteEntry {
         label: "fuzzy search",
@@ -173,6 +203,11 @@ pub const ENTRIES: &[PaletteEntry] = &[
         action: Action::ToggleArchiveView,
     },
     PaletteEntry {
+        label: "toggle completed view",
+        keys: "X",
+        action: Action::ToggleCompletedView,
+    },
+    PaletteEntry {
         label: "archive completed tasks",
         keys: "A",
         action: Action::ArchiveCompleted,
@@ -216,6 +251,11 @@ pub const ENTRIES: &[PaletteEntry] = &[
         label: "toggle line numbers",
         keys: "L",
         action: Action::ToggleLineNum,
+    },
+    PaletteEntry {
+        label: "toggle creation dates",
+        keys: "C",
+        action: Action::ToggleCreatedDates,
     },
     PaletteEntry {
         label: "toggle list wrapping",
@@ -528,6 +568,8 @@ mod tests {
             Action::CursorBottom,
             Action::HalfPageDown,
             Action::HalfPageUp,
+            Action::PageDown,
+            Action::PageUp,
             Action::BeginAdd,
             Action::BeginEdit,
             Action::BeginEditInsert,
@@ -545,6 +587,7 @@ mod tests {
             Action::ToggleSelected,
             Action::GoList,
             Action::ToggleArchiveView,
+            Action::ToggleCompletedView,
             Action::ArchiveCompleted,
             Action::PickProject,
             Action::PickContext,
@@ -557,6 +600,7 @@ mod tests {
             Action::CycleDensity,
             Action::ToggleLineNum,
             Action::ToggleWrapRows,
+            Action::ToggleCreatedDates,
             Action::ToggleShowDone,
             Action::ToggleShowFuture,
             Action::CopyLine,

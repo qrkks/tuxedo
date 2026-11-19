@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, GroupKey, ListDueBucket, Mode, View};
 use crate::core::filter;
 use crate::theme::Theme;
-use crate::ui::{header, keep_cursor_visible, task_row};
+use crate::ui::{header, task_row};
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let theme = app.theme();
@@ -35,6 +35,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         },
     );
 
+    let mut viewport = app.task_viewports[View::List.idx()].borrow_mut();
+    viewport.rows.clear();
     if app.tasks().is_empty() {
         // The welcome overlay covers the same ground on first run; drawing the
         // empty-state card underneath stacks two boxes on top of each other.
@@ -55,7 +57,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let visible = app.visible_indices();
     let groups = app.visible_groups();
     let mut lines: Vec<Line> = Vec::new();
-    let mut cursor_lines = None;
 
     if visible.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -88,6 +89,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 multi_checked: app.selection.is_selected(abs),
                 selected: app.selection.is_selected(abs),
                 show_line_num: app.prefs.layout.line_num,
+                show_created_dates: app.prefs.show_created_dates,
                 match_term,
                 today: app.today(),
                 hidden_keys: &app.prefs.hidden_keys,
@@ -100,9 +102,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 theme,
                 app.prefs.wrap_rows.then_some(body_area.width),
             );
-            if i == app.cursor {
-                cursor_lines = Some(start..lines.len());
-            }
+            viewport.rows.push(start..lines.len());
             if matches!(gk, GroupKey::None) && i != last {
                 for _ in 0..blank {
                     lines.push(Line::raw(""));
@@ -111,14 +111,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         }
     }
 
-    let scroll_cell = &app.view_scroll[View::List.idx()];
-    let scroll = keep_cursor_visible(
-        scroll_cell.get(),
-        cursor_lines,
-        body_area.height,
-        lines.len(),
-    );
-    scroll_cell.set(scroll);
+    let scroll = viewport.render_offset(app.cursor, body_area.height, lines.len());
 
     let para = Paragraph::new(lines)
         .style(Style::default().bg(theme.bg).fg(theme.fg))
@@ -223,6 +216,56 @@ mod tests {
 
     use crate::app::{App, Density, Sort};
     use crate::config::Config;
+
+    #[test]
+    fn list_shows_existing_creation_dates_with_details_closed() {
+        let cfg = Config {
+            sort: Some(Sort::File),
+            density: Some(Density::Compact),
+            show_left: Some(false),
+            show_right: Some(false),
+            show_done: Some(true),
+            wrap_rows: Some(true),
+            ..Config::default()
+        };
+        let body = format!(
+            "(A) 2026-05-01 {}尾\n无日期\nx 2026-05-09 2026-05-02 已完成\n",
+            "研究资料".repeat(6)
+        );
+        let mut app = App::new("todo.txt".into(), body, "2026-05-10".into(), cfg);
+        let mut term = Terminal::new(TestBackend::new(38, 13)).unwrap();
+        let rendered = |backend: &TestBackend| {
+            backend
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+
+        term.draw(|frame| crate::ui::draw(frame, &app)).unwrap();
+        assert!(!rendered(term.backend()).contains("2026-05-01"));
+
+        app.prefs.show_created_dates = true;
+        term.draw(|frame| crate::ui::draw(frame, &app)).unwrap();
+        let text = rendered(term.backend());
+        assert_eq!(text.matches("2026-05-01").count(), 1);
+        assert!(text.contains("2026-05-02"));
+        assert!(!text.contains("2026-05-09"));
+        assert!(text.contains('尾'));
+
+        let buffer = term.backend().buffer();
+        let task_column = |symbol| {
+            buffer
+                .content()
+                .iter()
+                .position(|cell| cell.symbol() == symbol)
+                .unwrap()
+                % usize::from(buffer.area.width)
+        };
+        assert_eq!(task_column("研"), task_column("无"));
+        assert_eq!(task_column("研"), task_column("已"));
+    }
 
     #[test]
     fn list_renders_overflow_only_with_wrapping_enabled() {

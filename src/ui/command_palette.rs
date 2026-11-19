@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::App;
-use crate::app::palette::{self, ENTRIES};
+use crate::app::palette::{self, ENTRIES, TaskJump, task_jump};
 use crate::theme::Theme;
 use crate::ui::dialog::draft_cursor_spans;
 
@@ -31,6 +31,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let bg = Style::default().bg(theme.panel).fg(theme.fg);
 
     let hits = app.command_palette.hits();
+    let count = app.visible_indices().len();
+    let jump = task_jump(app.draft.text(), count);
     // Footer reserved (1 row) + divider (1 row); the rest is for input + list.
     let [input_area, divider_area, list_area, footer_area] = Layout::vertical([
         Constraint::Length(1),
@@ -56,7 +58,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         theme.fg,
         theme.panel,
     ));
-    let summary = if app.draft.text().is_empty() {
+    let summary = if app.draft.text().is_empty() || jump.is_some() {
         String::new()
     } else {
         format!("  {} matches", hits.len())
@@ -80,7 +82,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     );
 
     let list_h = usize::from(list_area.height);
-    if hits.is_empty() {
+    if let Some(jump) = jump {
+        let message = match jump {
+            TaskJump::Row(row) => format!("Enter to jump to task {}", row + 1),
+            TaskJump::OutOfRange if count == 0 => "No tasks in this view".into(),
+            TaskJump::OutOfRange => format!("Choose a task number from 1 to {count}"),
+        };
+        let line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(message, Style::default().fg(theme.fg)),
+        ]);
+        frame.render_widget(Paragraph::new(line).style(bg), list_area);
+    } else if hits.is_empty() {
         let line = Line::from(vec![
             Span::raw("  "),
             Span::styled("no matches", Style::default().fg(theme.dim)),

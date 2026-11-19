@@ -58,9 +58,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let [body_area, bottom_area] =
         Layout::vertical([Constraint::Min(1), Constraint::Length(bottom)]).areas(area);
 
-    // Determine pane widths. Sidebars apply to every view; navigation +
-    // detail pane track the cursor regardless of which view is active.
-    let show_left = app.prefs.layout.left;
+    // The completed view shows all tasks, so it does not display filters.
+    let show_left = app.prefs.layout.left && app.view() != View::Completed;
     let show_right = app.prefs.layout.right;
     let left_w = if show_left { LEFT_PANE_W } else { 0 };
     let right_w = if show_right { RIGHT_PANE_W } else { 0 };
@@ -89,7 +88,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     match app.view() {
         View::List => list::render(frame, center_area, app),
-        View::Archive => archive::render(frame, center_area, app),
+        View::Archive | View::Completed => archive::render(frame, center_area, app),
     }
     if let Some(ra) = right_area {
         detail::render(frame, ra, app);

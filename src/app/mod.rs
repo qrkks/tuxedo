@@ -1,5 +1,5 @@
 use core::fmt;
-use std::cell::Cell;
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -25,6 +25,7 @@ mod prefs;
 mod saved;
 mod selection;
 mod types;
+mod viewport;
 mod visibility;
 
 #[cfg(test)]
@@ -49,6 +50,7 @@ pub use types::{
     AUTOCOMPLETE_CAP, AddOutcome, Density, FLASH_TTL, Filter, LEADER_WINDOW, Mode, SavedFilter,
     Sort, UNDO_LIMIT, View,
 };
+use viewport::TaskViewport;
 pub use visibility::GroupKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +100,7 @@ pub struct App {
     /// Per-view saved cursor, indexed by `View::idx()`. `set_view` snapshots
     /// the outgoing view's cursor here and restores the incoming view's, so
     /// each view remembers where the user last was.
-    pub(crate) view_cursor: [usize; 2],
+    pub(crate) view_cursor: [usize; View::COUNT],
     /// Crate-private: same reason as `view` — `visible_cache` would drift.
     /// Read via `filter()`; mutate via `set_search`/`set_project`/etc.
     pub(crate) filter: Filter,
@@ -106,6 +108,8 @@ pub struct App {
     pub selection: Selection,
     flash_state: Flash,
     pub chord: Chord,
+    /// Digits entered directly in the task list, awaiting a semicolon.
+    pub task_jump_digits: String,
     pub file_path: PathBuf,
     /// Resolved path of the on-disk config file. Set by the binary after
     /// construction so the settings overlay can render a stable, real path
@@ -140,10 +144,8 @@ pub struct App {
     /// meaningful while `Mode::PickSavedFilter`; re-seeded on each open.
     saved_pick_idx: usize,
     pub command_palette: CommandPaletteState,
-    /// Vertical scroll offset (rows from the top of the line list) for each
-    /// view, keyed by `View::idx()`. Updated at render time via `Cell` so the
-    /// renderer can keep the cursor row visible without taking `&mut self`.
-    pub(crate) view_scroll: [Cell<u16>; 2],
+    /// Layout and scroll position from the most recent render of each view.
+    pub(crate) task_viewports: [RefCell<TaskViewport>; View::COUNT],
     /// Handle to the in-TUI capture server. `None` until the first time
     /// the user presses `s` (or invokes "show capture QR" from the
     /// palette). Once bound, the entry stays for the rest of the
@@ -197,12 +199,13 @@ impl App {
             mode: Mode::Normal,
             prefs: Prefs::from_config(cfg),
             cursor: 0,
-            view_cursor: [0; 2],
+            view_cursor: [0; View::COUNT],
             filter: Filter::default(),
             draft: DraftState::default(),
             selection: Selection::default(),
             flash_state: Flash::default(),
             chord: Chord::default(),
+            task_jump_digits: String::new(),
             file_path,
             config_path: None,
             should_quit: false,
@@ -214,7 +217,7 @@ impl App {
             saved_pick_restore: None,
             saved_pick_idx: 0,
             command_palette: CommandPaletteState::default(),
-            view_scroll: [Cell::new(0), Cell::new(0)],
+            task_viewports: std::array::from_fn(|_| RefCell::default()),
             share: None,
             notes_dir: note_dir,
             pending_editor_path: None,
@@ -463,33 +466,39 @@ impl App {
         self.store.task_raw(abs)
     }
 
-    /// Task under the cursor, resolved against the active view's source:
-    /// `archive.tasks()` in Archive view, `tasks` otherwise.
-    pub fn cur_task(&self) -> Option<&Task> {
-        let i = self.cur_abs()?;
+    /// Resolve an index in the active view. Completed view places archive
+    /// indices after the live tasks so both sources share the same list.
+    pub(crate) fn view_task(&self, index: usize) -> Option<&Task> {
         match self.view {
-            View::Archive => self.store.archive().tasks().get(i),
-            _ => self.store.tasks().get(i),
+            View::List => self.tasks().get(index),
+            View::Archive => self.archive().tasks().get(index),
+            View::Completed => match index.checked_sub(self.tasks().len()) {
+                Some(archived) => self.archive().tasks().get(archived),
+                None => self.tasks().get(index),
+            },
         }
+    }
+
+    /// Task under the cursor in the active view.
+    pub fn cur_task(&self) -> Option<&Task> {
+        self.view_task(self.cur_abs()?)
     }
 
     /// Pump archive state (startup loader + external `done.txt` edits). Returns
     /// true when the visible archive changed, so the caller redraws. Refreshes
-    /// the visible cache when the Archive view is active.
+    /// the visible cache when the active view includes archived tasks.
     pub fn poll_archive(&mut self) -> bool {
         let changed = self.store.poll_archive();
-        if changed && matches!(self.view, View::Archive) {
+        if changed && self.view != View::List {
             self.recompute_visible();
             self.clamp_cursor();
         }
         changed
     }
 
-    /// Index of the task under the cursor *into `self.tasks`*. Returns `None`
-    /// in Archive view because the cursor there points into `archive.tasks()`.
-    /// Use this — not `cur_abs()` — for any write that mutates `self.tasks`.
+    /// Index of the selected live task in List view, for mutations.
     pub fn cur_task_index_in_tasks(&self) -> Option<usize> {
-        if matches!(self.view, View::Archive) {
+        if self.view != View::List {
             return None;
         }
         self.cur_abs()
@@ -500,7 +509,7 @@ impl App {
         &self.filter
     }
 
-    /// Active top-level view (List/Archive).
+    /// Active top-level task view.
     pub fn view(&self) -> View {
         self.view
     }
@@ -517,6 +526,27 @@ impl App {
         self.recompute_visible();
         self.cursor = self.view_cursor[view.idx()];
         self.clamp_cursor();
+    }
+
+    /// Move the active task view by one screen of rendered rows.
+    pub fn page_tasks(&mut self, forward: bool) {
+        if let Some(cursor) = self.task_viewports[self.view.idx()]
+            .get_mut()
+            .page(self.cursor, forward)
+        {
+            self.cursor = cursor;
+        }
+    }
+
+    pub fn jump_to_task_row(&mut self, row: usize) {
+        self.cursor = row;
+        self.follow_task_cursor();
+    }
+
+    pub fn follow_task_cursor(&mut self) {
+        self.task_viewports[self.view.idx()]
+            .get_mut()
+            .follow_cursor();
     }
 
     /// Set the search-filter text. Cursor resets and the cache is recomputed.

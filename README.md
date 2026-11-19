@@ -7,7 +7,7 @@ A community-maintained fork of [Tuxedo](https://github.com/webstonehq/tuxedo), a
 Tuxedo 的社区分支，重点改善中文、日文、韩文及中英混排的终端显示。可以继续使用原来的 todo.txt 文件。
 
 - 右侧详情和备注自动换行。按 `]` 打开详情。
-- 主列表按 `w` 开关长任务换行。设置会记住，`j` / `k` 仍然每次移动一个任务。
+- 主列表按 `w` 开关长任务换行，按 `C` 开关创建日期。设置会记住，`j` / `k` 仍然每次移动一个任务。
 - Windows 用户可下载试用包。其他平台可[从源码构建](#from-source)。
 
 The detail pane wraps CJK text by terminal display width. Press `w` to wrap long tasks in the main list. The preference is saved across sessions.
@@ -206,6 +206,11 @@ removes them from the working file (atomically: `done.txt` is written
 before the originals are dropped). `a` toggles the archive view so you
 can browse, un-archive, or permanently delete past tasks.
 
+Press `X` to browse completed tasks from `todo.txt` and `done.txt` in one
+read-only view, grouped by completion date with the most recent day first.
+Tasks without a completion date appear under `unknown`. In the main list,
+`x` records today’s date when marking an open task complete.
+
 ## Command-line interface
 
 When the first argument is a recognized subcommand, tuxedo runs a one-shot
@@ -279,6 +284,8 @@ cursor_top     = "gg"
 cursor_bottom  = "G"
 half_page_down = "Ctrl-d"
 half_page_up   = "Ctrl-u"
+page_down      = "PageDown"
+page_up        = "PageUp"
 
 # Editing
 begin_add            = "n"
@@ -310,6 +317,7 @@ toggle_visual       = "v"
 toggle_selected     = "space"
 go_list             = "l"
 toggle_archive_view = "a"
+toggle_completed_view = "X"
 archive_completed   = "A"
 toggle_show_done    = "H"
 toggle_show_future  = "F"
@@ -368,7 +376,10 @@ chord here is ignored rather than bound to a key that could never fire.
 | `k` / `↑` | previous task |
 | `gg` | first task |
 | `G` | last task |
-| `Ctrl-d` / `Ctrl-u` | half-page down / up |
+| `PgDn` / `PgUp` | one screen down / up, including wrapped task lines |
+| `Ctrl-d` / `Ctrl-u` | jump 10 tasks down / up |
+| `12;` | jump to task 12 in the current sorted and filtered view in Normal mode. Full-width digits and `；` also work. Press `Esc` to cancel. |
+| `:12` then `Enter` | jump to task 12 in the current view, following its sort and filters |
 
 ### Editing
 
@@ -433,6 +444,7 @@ The modal keys below apply in Normal mode:
 | `yy` / `yb` (in visual) | copy selected lines / bodies |
 | `l` | list (default) view |
 | `a` | toggle archive view |
+| `X` | toggle the combined completed view |
 | `A` | archive completed tasks → `done.txt` |
 | `H` | toggle showing done tasks in the main list |
 | `o` | open the current task's existing `note:<path>` in `$VISUAL` / `$EDITOR` |
@@ -452,6 +464,7 @@ backspace to drop them. A `/`-search filter seeds nothing.
 | `D` | cycle density: compact → comfortable → cozy |
 | `L` | toggle line numbers |
 | `w` | toggle wrapping long tasks in the main list (`wrap_rows` in `config.toml`) |
+| `C` | toggle creation dates in the main list (`show_created_dates` in `config.toml`) |
 
 ### System
 

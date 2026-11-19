@@ -17,7 +17,7 @@ const NAVIGATION: Section = (
     &[
         ("j / k  (↓ / ↑)", "next / previous task"),
         ("gg / G", "first / last task"),
-        ("Ctrl-d / Ctrl-u", "page down / up"),
+        ("PgDn / PgUp", "page down / up"),
     ],
 );
 
@@ -58,7 +58,7 @@ const VIEW: Section = (
         ("S", "cycle sort"),
         ("v", "visual / multi-select"),
         ("l", "list view"),
-        ("a", "archive view"),
+        ("a / X", "archive / completed"),
         ("A", "archive completed"),
         ("H", "show done in list"),
         ("F", "show future in list"),

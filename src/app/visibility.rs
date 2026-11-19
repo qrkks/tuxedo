@@ -15,9 +15,8 @@ pub enum GroupKey {
 }
 
 impl App {
-    /// Indices into the active view's task source after filter + sort, in
-    /// display order. The source is `archive().tasks()` in Archive view,
-    /// `tasks()` otherwise. Reads the cache populated by `recompute_visible`.
+    /// Visible indices in display order. Resolve them with `view_task` for
+    /// views that read from the archive or combine both sources.
     pub fn visible_indices(&self) -> &[usize] {
         &self.visible_cache
     }
@@ -30,9 +29,10 @@ impl App {
     /// Recompute the cached visible-index list and parallel group keys. Call
     /// after any mutation that affects filter/sort/view/tasks/archive.
     pub fn recompute_visible(&mut self) {
+        self.task_viewports[self.view.idx()].get_mut().invalidate();
         match self.view {
             View::List => self.rebuild_list_cache(),
-            View::Archive => self.rebuild_archive_cache(),
+            View::Archive | View::Completed => self.rebuild_completion_cache(),
         }
     }
 
@@ -76,28 +76,27 @@ impl App {
         self.visible_cache = idxs;
     }
 
-    fn rebuild_archive_cache(&mut self) {
-        let archive = self.store.archive().tasks();
-        let mut idxs: Vec<usize> = (0..archive.len()).collect();
-        idxs.sort_by(|&a, &b| {
-            archive[b]
-                .done_date
-                .as_deref()
-                .unwrap_or("")
-                .cmp(archive[a].done_date.as_deref().unwrap_or(""))
-        });
-        let groups: Vec<GroupKey> = idxs
+    fn rebuild_completion_cache(&mut self) {
+        let mut idxs: Vec<usize> = if self.view == View::Completed {
+            self.tasks()
+                .iter()
+                .chain(self.archive().tasks())
+                .enumerate()
+                .filter_map(|(idx, task)| task.done.then_some(idx))
+                .collect()
+        } else {
+            (0..self.archive().len()).collect()
+        };
+        let done_date = |idx| {
+            self.view_task(idx)
+                .and_then(|task| task.done_date.as_deref())
+        };
+        idxs.sort_by_key(|&idx| std::cmp::Reverse(done_date(idx)));
+        self.visible_groups = idxs
             .iter()
-            .map(|&i| {
-                let date = archive[i]
-                    .done_date
-                    .clone()
-                    .unwrap_or_else(|| "unknown".into());
-                GroupKey::ArchiveDate(date)
-            })
+            .map(|&idx| GroupKey::ArchiveDate(done_date(idx).unwrap_or("unknown").to_owned()))
             .collect();
         self.visible_cache = idxs;
-        self.visible_groups = groups;
     }
 
     pub fn cur_abs(&self) -> Option<usize> {
@@ -171,6 +170,41 @@ mod tests {
         app.set_view(View::Archive);
         app.set_view(View::List);
         assert_eq!(app.cursor, 3, "cursor lost on List → Archive → List");
+    }
+
+    #[test]
+    fn completed_view_combines_both_files_by_completion_date() {
+        let mut app = build_app("pending\nx 2026-05-02 2026-05-01 live\nx undated\n");
+        let path = app.archive().path().to_path_buf();
+        app.store.archive = crate::app::Archive::for_test(
+            crate::todo::parse_file(
+                "x 2026-05-03 2026-04-01 archived\nx 2026-05-02 2026-04-01 same day\n",
+            ),
+            String::new(),
+            path,
+        );
+
+        app.set_view(View::Completed);
+        assert_eq!(
+            app.visible_groups(),
+            [
+                GroupKey::ArchiveDate("2026-05-03".into()),
+                GroupKey::ArchiveDate("2026-05-02".into()),
+                GroupKey::ArchiveDate("2026-05-02".into()),
+                GroupKey::ArchiveDate("unknown".into()),
+            ]
+        );
+        for (cursor, body) in ["archived", "live", "same day", "undated"]
+            .into_iter()
+            .enumerate()
+        {
+            app.cursor = cursor;
+            assert!(app.cur_task().is_some_and(|task| task.raw.ends_with(body)));
+            assert_eq!(app.cur_task_index_in_tasks(), None);
+        }
+
+        app.set_view(View::Archive);
+        assert_eq!(app.visible_indices().len(), 2);
     }
 
     #[test]

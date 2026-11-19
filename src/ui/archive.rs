@@ -5,13 +5,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::app::{App, GroupKey, Mode, View};
-use crate::ui::{header, keep_cursor_visible, task_row};
+use crate::ui::{header, task_row};
 
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let theme = app.theme();
+    let view = app.view();
+    let completed = view == View::Completed;
     super::fill_bg(frame, area, Style::default().bg(theme.bg));
 
-    let [header_area, _sp, body_area] = Layout::vertical([
+    let [header_area, date_area, body_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(1),
@@ -23,19 +25,21 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         header_area,
         theme,
         header::HeaderProps {
-            title: Some("done.txt"),
-            // file: "completed",
-            count: app.archive().len(),
+            title: Some(if completed { "completed" } else { "done.txt" }),
+            count: app.visible_indices().len(),
             sort: "completion-date",
             filter: None,
         },
     );
 
     let visible = app.visible_indices();
+    let wrap_width = (completed && app.prefs.wrap_rows).then_some(body_area.width);
     let groups = app.visible_groups();
     let blank = super::density_blank_lines(app.prefs.density);
     let cursor_active = app.mode != Mode::Help && app.mode != Mode::Settings;
 
+    let mut viewport = app.task_viewports[view.idx()].borrow_mut();
+    viewport.rows.clear();
     if visible.is_empty() {
         let para = Paragraph::new(vec![Line::from(Span::styled(
             "   no completed tasks yet".to_string(),
@@ -56,7 +60,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     let mut lines: Vec<Line> = Vec::new();
     let mut last_date: Option<&str> = None;
-    let mut cursor_line: Option<usize> = None;
+    let mut date_headers = Vec::new();
 
     for (i, (&abs, gk)) in visible.iter().zip(groups.iter()).enumerate() {
         let date = match gk {
@@ -68,6 +72,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 for _ in 0..blank {
                     lines.push(Line::raw(" "));
                 }
+            }
+            if completed {
+                date_headers.push(lines.len());
             }
             let count = *counts.get(date).unwrap_or(&0);
             lines.push(Line::from(vec![
@@ -87,7 +94,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             last_date = Some(date);
         }
 
-        let task = &app.archive().tasks()[abs];
+        let task = app.view_task(abs).expect("valid completion index");
         let opts = task_row::RowOpts {
             idx_label: i,
             cursor: i == app.cursor && cursor_active,
@@ -95,24 +102,25 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             multi_checked: false,
             selected: false,
             show_line_num: app.prefs.layout.line_num,
+            show_created_dates: false,
             match_term: None,
             today: app.today(),
             hidden_keys: &app.prefs.hidden_keys,
         };
-        if i == app.cursor {
-            cursor_line = Some(lines.len());
-        }
-        lines.push(task_row::build_line(task, opts, theme));
+        let start = lines.len();
+        task_row::append_list_row(&mut lines, task, opts, theme, wrap_width);
+        viewport.rows.push(start..lines.len());
     }
 
-    let scroll_cell = &app.view_scroll[View::Archive.idx()];
-    let scroll = keep_cursor_visible(
-        scroll_cell.get(),
-        cursor_line.map(|line| line..line + 1),
-        body_area.height,
-        lines.len(),
-    );
-    scroll_cell.set(scroll);
+    let scroll = viewport.render_offset(app.cursor, body_area.height, lines.len());
+
+    let scroll_line = usize::from(scroll);
+    if let Some(&date_header) = date_headers.iter().rfind(|&&line| line <= scroll_line)
+        && date_header < scroll_line
+    {
+        // Keep the current date in the existing spacer when its group header scrolls away.
+        frame.render_widget(Paragraph::new(lines[date_header].clone()), date_area);
+    }
 
     let para = Paragraph::new(lines)
         .style(Style::default().bg(theme.bg).fg(theme.fg))

@@ -50,6 +50,10 @@ fn make_app() -> App {
     // we hand `App::new` as the in-memory body, so the comparison passes
     // without forcing a reload.
     std::fs::write(FIXTURE_PATH, sample::TODO_RAW).expect("seed fixture file");
+    sample_app()
+}
+
+fn sample_app() -> App {
     let mut app = App::new(
         PathBuf::from(FIXTURE_PATH),
         sample::TODO_RAW.to_string(),
@@ -287,28 +291,28 @@ fn list_sidebar_empty_hints() {
 
 #[test]
 fn archive_view() {
-    let mut app = make_app();
+    let mut app = sample_app();
     app.set_view(View::Archive);
     snapshot_app("archive_view", &app);
 }
 
 #[test]
 fn help_overlay() {
-    let mut app = make_app();
+    let mut app = sample_app();
     app.mode = Mode::Help;
     snapshot_app("help_overlay", &app);
 }
 
 #[test]
 fn settings_overlay() {
-    let mut app = make_app();
+    let mut app = sample_app();
     app.mode = Mode::Settings;
     snapshot_app("settings_overlay", &app);
 }
 
 #[test]
 fn command_palette_unfiltered() {
-    let mut app = make_app();
+    let mut app = sample_app();
     app.command_palette.open(Mode::Normal);
     app.mode = Mode::CommandPalette;
     snapshot_app("command_palette_unfiltered", &app);
@@ -316,7 +320,7 @@ fn command_palette_unfiltered() {
 
 #[test]
 fn command_palette_filtered() {
-    let mut app = make_app();
+    let mut app = sample_app();
     app.command_palette.open(Mode::Normal);
     app.mode = Mode::CommandPalette;
     app.draft_set("arch".to_string());
@@ -328,7 +332,7 @@ fn command_palette_filtered() {
 fn command_palette_preserves_visual_selection() {
     // Open the palette mid-Visual with two rows ticked: the underlying list
     // must keep its checkboxes visible while the overlay is shown.
-    let mut app = make_app();
+    let mut app = sample_app();
     app.mode = Mode::Visual;
     app.selection.toggle(0);
     app.selection.toggle(1);
@@ -504,6 +508,25 @@ fn render_text(app: &App, cols: u16, rows: u16) -> String {
     let mut terminal = Terminal::new(backend).expect("terminal init");
     terminal.draw(|f| ui::draw(f, app)).expect("draw frame");
     buffer_to_text(terminal.backend().buffer())
+}
+
+#[test]
+fn completed_view_keeps_date_visible_for_a_wrapped_task() {
+    let today_task = format!("x 2026-05-06 today-task {}\n", "long text ".repeat(100));
+    let older_task = String::from("x 2026-05-05 older-task\n");
+    let mut app = App::new(
+        PathBuf::from(FIXTURE_PATH),
+        today_task + &older_task,
+        "2026-05-06".into(),
+        Config::default(),
+    );
+    app.prefs.layout.right = false;
+    app.prefs.wrap_rows = true;
+    app.set_view(View::Completed);
+
+    let text = render_text(&app, 60, 8);
+    assert!(text.contains("today-task"), "{text}");
+    assert!(text.contains("2026-05-06  1 completed"), "{text}");
 }
 
 #[test]

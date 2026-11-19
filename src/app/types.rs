@@ -53,15 +53,19 @@ pub enum Mode {
 pub enum View {
     List,
     Archive,
+    Completed,
 }
 
 impl View {
+    pub(crate) const COUNT: usize = 3;
+
     /// Stable slot index for keying per-view state arrays. Don't reorder the
     /// `View` variants without updating this together.
     pub fn idx(self) -> usize {
         match self {
             View::List => 0,
             View::Archive => 1,
+            View::Completed => 2,
         }
     }
 }

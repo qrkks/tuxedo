@@ -23,6 +23,7 @@ pub struct Config {
     pub show_left: Option<bool>,
     pub show_right: Option<bool>,
     pub show_line_num: Option<bool>,
+    pub show_created_dates: Option<bool>,
     pub show_status_bar: Option<bool>,
     pub show_done: Option<bool>,
     pub show_future: Option<bool>,
@@ -113,7 +114,7 @@ impl Config {
     }
 
     /// Resolve `${XDG_CONFIG_HOME:-$HOME/.config}/tuxedo/config.toml`.
-    /// Returns None only when neither XDG_CONFIG_HOME nor HOME is set.
+    /// On Windows, USERPROFILE supplies the home directory when HOME is unset.
     pub fn path() -> Option<PathBuf> {
         let base = crate::xdg::config_home()?;
         Some(Self::path_in(&base))
@@ -153,6 +154,7 @@ fn parse(s: &str) -> Config {
             "show_left" => c.show_left = parse_bool(v),
             "show_right" => c.show_right = parse_bool(v),
             "show_line_num" => c.show_line_num = parse_bool(v),
+            "show_created_dates" => c.show_created_dates = parse_bool(v),
             "show_status_bar" => c.show_status_bar = parse_bool(v),
             "show_done" => c.show_done = parse_bool(v),
             "show_future" => c.show_future = parse_bool(v),
@@ -220,6 +222,9 @@ fn serialize(c: &Config) -> String {
     if let Some(v) = c.show_line_num {
         let _ = writeln!(out, "show_line_num = {v}");
     }
+    if let Some(v) = c.show_created_dates {
+        let _ = writeln!(out, "show_created_dates = {v}");
+    }
     if let Some(v) = c.show_status_bar {
         let _ = writeln!(out, "show_status_bar = {v}");
     }
@@ -286,6 +291,7 @@ mod tests {
             show_left: Some(false),
             show_right: Some(true),
             show_line_num: Some(false),
+            show_created_dates: Some(true),
             show_status_bar: Some(true),
             show_done: Some(true),
             show_future: Some(true),
@@ -447,6 +453,7 @@ mod tests {
             show_left: Some(false),
             show_right: Some(false),
             show_line_num: Some(true),
+            show_created_dates: Some(false),
             show_status_bar: Some(false),
             show_done: Some(true),
             show_future: Some(false),

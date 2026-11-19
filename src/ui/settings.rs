@@ -58,6 +58,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             "  line numbers",
             Some(format!("{}  (L to toggle)", on(app.prefs.layout.line_num))),
         ),
+        (
+            "  creation dates",
+            Some(format!(
+                "{}  (C to toggle)",
+                on(app.prefs.show_created_dates)
+            )),
+        ),
         ("  status bar", Some(on(app.prefs.layout.status_bar).into())),
         (
             "  filter sidebar",

@@ -19,6 +19,8 @@ pub fn config_home() -> Option<PathBuf> {
             p.display()
         );
     }
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".config"))
+    let home = std::env::var_os("HOME").filter(|value| !value.is_empty());
+    #[cfg(windows)]
+    let home = home.or_else(|| std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()));
+    Some(PathBuf::from(home?).join(".config"))
 }
