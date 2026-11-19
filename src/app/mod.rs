@@ -108,7 +108,7 @@ pub struct App {
     pub selection: Selection,
     flash_state: Flash,
     pub chord: Chord,
-    /// Digits entered directly in the task list, awaiting a semicolon.
+    /// Digits entered directly in the task list, awaiting confirmation.
     pub task_jump_digits: String,
     pub file_path: PathBuf,
     /// Resolved path of the on-disk config file. Set by the binary after

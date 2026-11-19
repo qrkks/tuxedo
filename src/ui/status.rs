@@ -68,7 +68,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let pending_jump = (!app.task_jump_digits.is_empty())
-        .then(|| format!("Jump to {} · ; confirm · Esc cancel", app.task_jump_digits));
+        .then(|| format!("Jump to {} · Enter · Esc cancel", app.task_jump_digits));
     let hint = pending_jump.as_deref().unwrap_or(hint);
 
     let mut right_parts = Vec::new();

@@ -1409,12 +1409,13 @@ fn apply_action(app: &mut App, action: Action) {
 fn handle_normal(app: &mut App, key: KeyEvent, keybinds: &KeyBindings) {
     let plain_key = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
     if !app.task_jump_digits.is_empty() {
-        match key.code {
-            KeyCode::Esc => {
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) => {
                 app.task_jump_digits.clear();
                 return;
             }
-            KeyCode::Char(';' | '；') if plain_key => {
+            (KeyCode::Enter, KeyModifiers::NONE)
+            | (KeyCode::Char(';' | '；'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
                 let digits = std::mem::take(&mut app.task_jump_digits);
                 match task_jump(&digits, app.visible_indices().len()) {
                     Some(TaskJump::Row(row)) => app.jump_to_task_row(row),
@@ -1796,7 +1797,15 @@ mod tests {
         let keys = KeyBindings::default();
         let backend = ratatui::backend::TestBackend::new(88, 10);
         let mut terminal = ratatui::Terminal::new(backend).expect("test terminal");
-        for sequence in ["12;", "12；", "１２；", "１２;"] {
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        for (digits, confirm) in [
+            ("12", enter),
+            ("１２", enter),
+            ("12", key(';')),
+            ("12", key('；')),
+            ("１２", key('；')),
+            ("１２", key(';')),
+        ] {
             handle_key(&mut app, key('g'), &keys);
             handle_key(&mut app, key('g'), &keys);
             let render = |terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
@@ -1811,17 +1820,13 @@ mod tests {
                     .collect::<String>()
             };
             assert!(!render(&mut terminal, &app).contains("target-row"));
-            let mut characters = sequence.chars();
-            let confirm = characters
-                .next_back()
-                .expect("jump sequence has a semicolon");
-            for digit in characters {
+            for digit in digits.chars() {
                 handle_key(&mut app, key(digit), &keys);
             }
             assert_eq!(app.mode, Mode::Normal);
             assert_eq!(app.cursor, 0);
             assert!(app.draft.text().is_empty());
-            handle_key(&mut app, key(confirm), &keys);
+            handle_key(&mut app, confirm, &keys);
             assert_eq!(app.mode, Mode::Normal);
             assert_eq!(app.cursor, 11);
             assert_eq!(app.cur_abs(), Some(0));
@@ -1836,19 +1841,25 @@ mod tests {
         let keys = KeyBindings::default();
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
 
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         handle_key(&mut app, key('2'), &keys);
         handle_key(&mut app, esc, &keys);
-        for separator in [';', '；'] {
-            handle_key(&mut app, key(separator), &keys);
+        for confirm in [enter, key(';'), key('；')] {
+            handle_key(&mut app, confirm, &keys);
             assert_eq!(app.cursor, 0);
             assert_eq!(app.filter().project.as_deref(), Some("work"));
             assert_eq!(app.flash_active(), None);
         }
 
-        for sequence in ["0;", "３；", "9999999999999999999999999999999999999999;"] {
-            for c in sequence.chars() {
-                handle_key(&mut app, key(c), &keys);
+        for (digits, confirm) in [
+            ("0", enter),
+            ("３", key('；')),
+            ("9999999999999999999999999999999999999999", key(';')),
+        ] {
+            for digit in digits.chars() {
+                handle_key(&mut app, key(digit), &keys);
             }
+            handle_key(&mut app, confirm, &keys);
             assert_eq!(app.mode, Mode::Normal);
             assert_eq!(app.cursor, 0);
             assert_eq!(app.flash_active(), Some("task number out of range"));

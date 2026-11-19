@@ -378,7 +378,7 @@ chord here is ignored rather than bound to a key that could never fire.
 | `G` | last task |
 | `PgDn` / `PgUp` | one screen down / up, including wrapped task lines |
 | `Ctrl-d` / `Ctrl-u` | jump 10 tasks down / up |
-| `12;` | jump to task 12 in the current sorted and filtered view in Normal mode. Full-width digits and `；` also work. Press `Esc` to cancel. |
+| `12` then `Enter`, or `12;` | jump to task 12 in the current sorted and filtered view in Normal mode. Full-width digits and `；` also work. Press `Esc` to cancel. |
 | `:12` then `Enter` | jump to task 12 in the current view, following its sort and filters |
 
 ### Editing
