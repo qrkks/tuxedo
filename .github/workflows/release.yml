@@ -130,6 +130,7 @@ jobs:
             dist/*.sha256
 
   update-tap:
+    if: github.repository == 'webstonehq/tuxedo'
     name: Update Homebrew tap
     needs: release
     runs-on: ubuntu-latest

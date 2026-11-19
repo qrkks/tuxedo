@@ -1,15 +1,19 @@
-# tuxedo
+# Tuxedo CJK
 
-A fast, keyboard-driven terminal UI for [todo.txt](http://todotxt.org/).
-Vim-style bindings, atomic writes, instant external-edit detection, and five
-hand-tuned themes — all in a single static binary.
+A community-maintained fork of [Tuxedo](https://github.com/webstonehq/tuxedo), a terminal UI for [todo.txt](https://github.com/todotxt/todo.txt).
 
-```sh
-brew install tuxedo
-```
+**[Download the Windows x64 build](https://github.com/qrkks/tuxedo/releases/latest)** · **[Report a CJK issue](https://github.com/qrkks/tuxedo/issues)**
 
-[![CI](https://github.com/webstonehq/tuxedo/actions/workflows/ci.yml/badge.svg)](https://github.com/webstonehq/tuxedo/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/webstonehq/tuxedo?logo=github)](https://github.com/webstonehq/tuxedo/releases/latest)
+Tuxedo 的社区分支，重点改善中文、日文、韩文及中英混排的终端显示。可以继续使用原来的 todo.txt 文件。
+
+- 右侧详情和备注自动换行。按 `]` 打开详情。
+- 主列表按 `w` 开关长任务换行。设置会记住，`j` / `k` 仍然每次移动一个任务。
+- Windows 用户可下载试用包。其他平台可[从源码构建](#from-source)。
+
+The detail pane wraps CJK text by terminal display width. Press `w` to wrap long tasks in the main list. The preference is saved across sessions.
+
+This fork tracks upstream on `main` and develops the CJK edition on `cjk`. The original project and contributors are credited under the [MIT license](LICENSE).
+
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 [![Rust](https://img.shields.io/badge/rust-2024-orange.svg?logo=rust)](https://www.rust-lang.org)
 
@@ -120,30 +124,26 @@ another theme is skipped with a warning at startup.
 
 ## Install
 
-### Homebrew (macOS, Linux)
+### Windows x64
 
-```sh
-brew install tuxedo
+Download and extract the ZIP from the [latest Tuxedo CJK release](https://github.com/qrkks/tuxedo/releases/latest). You can launch the file directly from PowerShell:
+
+```powershell
+.\tuxedo.exe "D:\path\to\todo.txt"
 ```
-
-### Prebuilt binaries
-
-Download the archive for your platform from the [latest release](https://github.com/webstonehq/tuxedo/releases/latest) and put `tuxedo` on your `PATH`.
-
-Targets: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`. Each archive ships with a `.sha256` checksum.
 
 ### From source
 
 ```sh
-cargo install --git https://github.com/webstonehq/tuxedo
+cargo install --locked --git https://github.com/qrkks/tuxedo --branch cjk
 ```
 
 Or clone and build:
 
 ```sh
-git clone https://github.com/webstonehq/tuxedo
+git clone --branch cjk https://github.com/qrkks/tuxedo.git
 cd tuxedo
-cargo build --release
+cargo build --release --locked
 ./target/release/tuxedo [FILE]
 ```
 
@@ -167,7 +167,7 @@ tuxedo --version
 
 When a newer release is available, the status bar shows `↑ <version> (tuxedo
 update)` next to the version. The check runs in the background, is cached at
-`$XDG_CACHE_HOME/tuxedo/latest_version.json` for 24 h, and fails silently
+`$XDG_CACHE_HOME/tuxedo-cjk/latest_version.json` for 24 h, and fails silently
 when offline. Set `TUXEDO_NO_UPDATE_CHECK=1` to disable.
 
 ### Which file tuxedo opens

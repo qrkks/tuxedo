@@ -3,12 +3,10 @@
 //! Two pieces:
 //!
 //! 1. [`run`] — handler for `tuxedo update`. Detects how tuxedo was installed
-//!    (Homebrew, Cargo, plain binary) and prints the exact command the user
-//!    should run. Does not execute it: we don't want to surprise users with a
-//!    `brew upgrade` or a binary self-replace.
+//!    and prints instructions for updating to a Tuxedo CJK build.
 //!
 //! 2. [`spawn_check`] — background thread invoked at TUI startup that consults
-//!    a cache under `$XDG_CACHE_HOME/tuxedo/latest_version.json`. If the cache
+//!    a cache under `$XDG_CACHE_HOME/tuxedo-cjk/latest_version.json`. If the cache
 //!    is missing or older than 24h, it shells out to `curl` to read the
 //!    `tag_name` of the latest GitHub release, rewrites the cache, and returns
 //!    the tag through an mpsc channel. The TUI's status bar reads it and
@@ -48,29 +46,18 @@ pub fn run() -> io::Result<()> {
     }
     println!();
     match kind {
-        InstallKind::Homebrew => {
-            println!("Looks like a Homebrew install. Update with:");
-            println!();
-            println!("    brew update && brew upgrade webstonehq/tap/tuxedo");
-        }
         InstallKind::Cargo => {
-            println!("Looks like a `cargo install` build. Update with:");
-            println!();
-            println!("    cargo install --git https://github.com/webstonehq/tuxedo --force");
+            println!("Update your Cargo install with:");
+            println!("    {INSTALL_FROM_SOURCE}");
         }
         InstallKind::Binary => {
-            println!("Looks like a downloaded binary. Grab the latest from:");
-            println!();
-            println!("    https://github.com/webstonehq/tuxedo/releases/latest");
-            println!();
-            println!("...and replace the file above.");
+            println!("Download the latest Tuxedo CJK build and replace the executable above:");
+            println!("    {RELEASE_PAGE}");
         }
-        InstallKind::Unknown => {
-            println!("Could not detect the install method. Options:");
-            println!();
-            println!("    brew upgrade webstonehq/tap/tuxedo");
-            println!("    cargo install --git https://github.com/webstonehq/tuxedo --force");
-            println!("    https://github.com/webstonehq/tuxedo/releases/latest");
+        InstallKind::Homebrew | InstallKind::Unknown => {
+            println!("Download a Tuxedo CJK build or install from source:");
+            println!("    {RELEASE_PAGE}");
+            println!("    {INSTALL_FROM_SOURCE}");
         }
     }
     Ok(())
@@ -118,7 +105,10 @@ const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 /// (which is what burned us once during testing).
 const NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 const CURL_TIMEOUT_SECS: u64 = 5;
-const RELEASE_URL: &str = "https://api.github.com/repos/webstonehq/tuxedo/releases/latest";
+const RELEASE_URL: &str = "https://api.github.com/repos/qrkks/tuxedo/releases/latest";
+const RELEASE_PAGE: &str = "https://github.com/qrkks/tuxedo/releases/latest";
+const INSTALL_FROM_SOURCE: &str =
+    "cargo install --locked --git https://github.com/qrkks/tuxedo --branch cjk --force";
 
 fn check_for_update() -> Option<String> {
     let cache_path = cache_path();
@@ -193,8 +183,8 @@ pub fn parse_tag_from_release_json(body: &str) -> Option<String> {
 /// comparison of that segment, so a future suffix like `2026.5.5-rc1` won't
 /// crash — it just compares the strings.
 pub fn is_newer(latest: &str, current: &str) -> bool {
-    let l = latest.trim_start_matches('v');
-    let c = current.trim_start_matches('v');
+    let l = latest.trim_start_matches('v').replace("-cjk.", ".");
+    let c = current.trim_start_matches('v').replace("-cjk.", ".");
     let mut li = l.split('.');
     let mut ci = c.split('.');
     loop {
@@ -217,7 +207,7 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 
 fn cache_path() -> Option<PathBuf> {
     let base = xdg_cache_home()?;
-    Some(base.join("tuxedo").join("latest_version.json"))
+    Some(base.join("tuxedo-cjk").join("latest_version.json"))
 }
 
 fn xdg_cache_home() -> Option<PathBuf> {
@@ -365,6 +355,13 @@ mod tests {
         // the longer one is newer.
         assert!(is_newer("2026.5.1", "2026.5"));
         assert!(!is_newer("2026.5", "2026.5.1"));
+    }
+
+    #[test]
+    fn is_newer_compares_cjk_revisions_and_upstream_patches_numerically() {
+        assert!(!is_newer("2026.8.1-cjk.1", "2026.8.1-cjk.1"));
+        assert!(is_newer("2026.8.1-cjk.10", "2026.8.1-cjk.9"));
+        assert!(is_newer("2026.8.10-cjk.1", "2026.8.9-cjk.10"));
     }
 
     #[test]

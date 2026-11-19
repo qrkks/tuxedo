@@ -72,7 +72,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         right_parts.push(format!("{} selected", app.selection.len()));
     }
     right_parts.push(app.today().to_string());
-    right_parts.push(concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")).to_string());
+    let version = env!("CARGO_PKG_VERSION");
+    let base_version = version
+        .split_once("-cjk.")
+        .map_or(version, |(base, _)| base);
+    right_parts.push(format!("tuxedo {base_version}"));
     // Track where the update suffix would slot in so we can paint it in the
     // accent color (the rest of the right text is dim).
     let update_suffix = app

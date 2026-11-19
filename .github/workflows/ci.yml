@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, cjk]
   pull_request:
 
 # Checkout is all this workflow needs; never grant write from a PR run.
