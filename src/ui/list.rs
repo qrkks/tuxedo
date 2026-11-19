@@ -55,7 +55,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let visible = app.visible_indices();
     let groups = app.visible_groups();
     let mut lines: Vec<Line> = Vec::new();
-    let mut cursor_line: Option<usize> = None;
+    let mut cursor_lines = None;
 
     if visible.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -92,10 +92,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 today: app.today(),
                 hidden_keys: &app.prefs.hidden_keys,
             };
+            let start = lines.len();
+            task_row::append_list_row(
+                &mut lines,
+                task,
+                opts,
+                theme,
+                app.prefs.wrap_rows.then_some(body_area.width),
+            );
             if i == app.cursor {
-                cursor_line = Some(lines.len());
+                cursor_lines = Some(start..lines.len());
             }
-            lines.push(task_row::build_line(task, opts, theme));
             if matches!(gk, GroupKey::None) && i != last {
                 for _ in 0..blank {
                     lines.push(Line::raw(""));
@@ -107,7 +114,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let scroll_cell = &app.view_scroll[View::List.idx()];
     let scroll = keep_cursor_visible(
         scroll_cell.get(),
-        cursor_line,
+        cursor_lines,
         body_area.height,
         lines.len(),
     );
@@ -206,5 +213,43 @@ fn due_bucket_color(theme: &Theme, b: ListDueBucket) -> Color {
 fn push_blanks(lines: &mut Vec<Line>, n: usize) {
     for _ in 0..n {
         lines.push(Line::raw(" "));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use crate::app::{App, Density, Sort};
+    use crate::config::Config;
+
+    #[test]
+    fn list_renders_overflow_only_with_wrapping_enabled() {
+        let cfg = Config {
+            sort: Some(Sort::File),
+            density: Some(Density::Compact),
+            show_left: Some(false),
+            show_right: Some(false),
+            ..Config::default()
+        };
+        let body = format!("{}尾\n第二个任务\n", "研究资料".repeat(6));
+        let mut app = App::new("todo.txt".into(), body, "2026-05-06".into(), cfg);
+        let mut term = Terminal::new(TestBackend::new(28, 12)).unwrap();
+        let has_tail = |backend: &TestBackend| {
+            backend
+                .buffer()
+                .content()
+                .iter()
+                .any(|cell| cell.symbol() == "尾")
+        };
+
+        term.draw(|frame| crate::ui::draw(frame, &app)).unwrap();
+        assert!(!has_tail(term.backend()));
+
+        app.prefs.wrap_rows = true;
+        term.draw(|frame| crate::ui::draw(frame, &app)).unwrap();
+        assert!(has_tail(term.backend()));
+        assert_eq!(app.visible_indices().len(), 2);
     }
 }

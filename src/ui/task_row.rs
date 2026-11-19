@@ -1,5 +1,8 @@
+use std::borrow::Cow;
+
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::search::subseq_match_ci;
 use crate::theme::Theme;
@@ -22,6 +25,10 @@ pub struct RowOpts<'a> {
 }
 
 pub fn build_line<'a>(task: &'a Task, opts: RowOpts<'a>, theme: &Theme) -> Line<'a> {
+    build_row(task, opts, theme).0
+}
+
+fn build_row<'a>(task: &'a Task, opts: RowOpts<'a>, theme: &Theme) -> (Line<'a>, usize) {
     let mut spans: Vec<Span<'a>> = Vec::new();
 
     if opts.show_line_num {
@@ -74,6 +81,8 @@ pub fn build_line<'a>(task: &'a Task, opts: RowOpts<'a>, theme: &Theme) -> Line<
     } else {
         spans.push(Span::raw("    "));
     }
+
+    let gutter = spans.len();
 
     // body — walk &str slices instead of collecting Vec<char>. Spans borrow
     // straight from `task.raw`, so most rows allocate only for the format!()
@@ -141,7 +150,79 @@ pub fn build_line<'a>(task: &'a Task, opts: RowOpts<'a>, theme: &Theme) -> Line<
     } else {
         Style::default()
     };
-    Line::from(spans).style(line_style)
+    (Line::from(spans).style(line_style), gutter)
+}
+
+/// Append a task and its indented continuation lines when list wrapping is on.
+pub(super) fn append_list_row<'a>(
+    lines: &mut Vec<Line<'a>>,
+    task: &'a Task,
+    opts: RowOpts<'a>,
+    theme: &Theme,
+    wrap_width: Option<u16>,
+) {
+    let (mut row, gutter) = build_row(task, opts, theme);
+    let Some(width) = wrap_width.map(usize::from) else {
+        lines.push(row);
+        return;
+    };
+    let indent: usize = row.spans[..gutter].iter().map(Span::width).sum();
+    if width < indent + 2 || row.width() <= width {
+        lines.push(row);
+        return;
+    }
+
+    let body_text: String = row.spans[gutter..]
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect();
+    let ranges = super::wrap::row_ranges(&body_text, width - indent);
+    if ranges.is_empty() {
+        lines.push(row);
+        return;
+    }
+
+    let body = row.spans.split_off(gutter);
+    let mut spans = body
+        .iter()
+        .scan(0, |offset, span| {
+            let start = *offset;
+            *offset += span.content.len();
+            Some((start, *offset, span))
+        })
+        .peekable();
+    let style = row.style;
+
+    for range in ranges {
+        while let Some(&(start, end, span)) = spans.peek() {
+            if start >= range.end {
+                break;
+            }
+            let from = range.start.max(start);
+            let to = range.end.min(end);
+            if from < to {
+                let mut piece_style = span.style;
+                if (from != start || to != end)
+                    && piece_style.add_modifier.contains(Modifier::UNDERLINED)
+                {
+                    // Each underlined run is treated as an OSC 8 target.
+                    piece_style = piece_style.remove_modifier(Modifier::UNDERLINED);
+                }
+                let part = from - start..to - start;
+                let content = match &span.content {
+                    Cow::Borrowed(text) => Cow::Borrowed(&text[part]),
+                    Cow::Owned(text) => Cow::Owned(text[part].to_owned()),
+                };
+                row.spans.push(Span::styled(content, piece_style));
+            }
+            if end > range.end {
+                break;
+            }
+            spans.next();
+        }
+        lines.push(row);
+        row = Line::from(Span::raw(" ".repeat(indent))).style(style);
+    }
 }
 
 fn push_token_spans<'a>(
@@ -213,17 +294,17 @@ fn push_token_spans<'a>(
     }
 
     let mut cursor = 0usize;
-    for p in local_positions {
-        if cursor < p {
-            spans.push(Span::styled(&token[cursor..p], base_style));
+    for (start, grapheme) in token.grapheme_indices(true) {
+        let end = start + grapheme.len();
+        if local_positions.next_if(|&pos| pos < end).is_none() {
+            continue;
         }
-        let ch = token[p..]
-            .chars()
-            .next()
-            .expect("match offset lands on a char boundary");
-        let next = p + ch.len_utf8();
-        spans.push(Span::styled(&token[p..next], hl_style));
-        cursor = next;
+        while local_positions.next_if(|&pos| pos < end).is_some() {}
+        if cursor < start {
+            spans.push(Span::styled(&token[cursor..start], base_style));
+        }
+        spans.push(Span::styled(grapheme, hl_style));
+        cursor = end;
     }
     if cursor < token.len() {
         spans.push(Span::styled(&token[cursor..], base_style));
@@ -371,6 +452,75 @@ mod tests {
     use super::*;
     use crate::theme::MUTED;
     use crate::todo::parse_line;
+
+    #[test]
+    fn list_rows_wrap_cjk_and_align_continuations() {
+        let task = parse_line("(A) 前文English後續，說明").unwrap();
+        let opts = RowOpts {
+            show_line_num: true,
+            cursor: true,
+            ..Default::default()
+        };
+        let mut rows = Vec::new();
+        append_list_row(&mut rows, &task, opts, &MUTED, Some(17));
+        let text: Vec<String> = rows
+            .iter()
+            .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
+            .collect();
+        assert_eq!(
+            text,
+            [
+                "  1 ▸ (A) 前文",
+                "          English",
+                "          後續，",
+                "          說明"
+            ]
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row.width() <= 17 && row.style.bg == Some(MUTED.cursor))
+        );
+
+        rows.clear();
+        append_list_row(&mut rows, &task, opts, &MUTED, None);
+        assert_eq!(rows, [build_line(&task, opts, &MUTED)]);
+    }
+
+    #[test]
+    fn wrapped_rows_keep_grapheme_highlights_and_skip_hidden_keys() {
+        let task = parse_line("整理资料 uid:id e\u{301} 👩‍💻 收尾").unwrap();
+        let opts = RowOpts {
+            match_term: Some("e"),
+            hidden_keys: &["uid".into()],
+            ..Default::default()
+        };
+        let mut rows = Vec::new();
+        append_list_row(&mut rows, &task, opts, &MUTED, Some(12));
+        let spans = || rows.iter().flat_map(|row| &row.spans);
+        assert!(
+            spans().any(|span| span.content == "e\u{301}" && span.style.bg == Some(MUTED.matched))
+        );
+        assert!(spans().any(|span| span.content.contains("👩‍💻")));
+        assert!(!spans().any(|span| span.content.contains("uid:")));
+    }
+
+    #[test]
+    fn wrapped_rows_only_link_complete_urls() {
+        let task = parse_line("前言 https://example.org").unwrap();
+        let url_span = |span: &Span<'_>| span.style.add_modifier.contains(Modifier::UNDERLINED);
+        let mut rows = Vec::new();
+        append_list_row(&mut rows, &task, RowOpts::default(), &MUTED, Some(25));
+        assert_eq!(rows.len(), 2);
+        assert!(rows[1].spans.iter().any(url_span));
+
+        rows.clear();
+        append_list_row(&mut rows, &task, RowOpts::default(), &MUTED, Some(15));
+        assert!(
+            rows.iter()
+                .flat_map(|row| &row.spans)
+                .all(|span| !url_span(span))
+        );
+    }
 
     #[test]
     fn build_line_does_not_panic_on_unicode_with_match_term() {

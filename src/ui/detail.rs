@@ -3,10 +3,10 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use unicode_linebreak::linebreaks;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+use super::wrap::{cell_width, unicode_word_parts};
 use crate::app::App;
 use crate::theme::Theme;
 use crate::todo::Task;
@@ -244,7 +244,7 @@ fn wrap_words<'a>(
         let mut style = word_style(word);
         let link = style.add_modifier.contains(Modifier::UNDERLINED);
         let whole_word = word.is_ascii() || link;
-        let word_width = whole_word.then(|| word.graphemes(true).map(UnicodeWidthStr::width).sum());
+        let word_width = whole_word.then(|| cell_width(word));
         if link && word_width.is_some_and(|cells| cells > width) {
             // The OSC 8 overlay uses each underlined run as a link target.
             style = style.remove_modifier(Modifier::UNDERLINED);
@@ -276,24 +276,6 @@ fn wrap_words<'a>(
         lines.push(line);
     }
     lines
-}
-
-/// Use Unicode line-break opportunities that fall on grapheme boundaries.
-/// Measure each grapheme in terminal cells, as ratatui does when painting.
-fn unicode_word_parts(word: &str) -> impl Iterator<Item = (&str, usize)> {
-    let mut breaks = linebreaks(word).peekable();
-    let mut start = 0;
-    let mut cells = 0;
-    word.grapheme_indices(true)
-        .filter_map(move |(index, grapheme)| {
-            let end = index + grapheme.len();
-            cells += grapheme.width();
-            while breaks.next_if(|&(offset, _)| offset < end).is_some() {}
-            breaks.next_if(|&(offset, _)| offset == end)?;
-            let part = &word[start..end];
-            start = end;
-            Some((part, std::mem::take(&mut cells)))
-        })
 }
 
 #[cfg(test)]

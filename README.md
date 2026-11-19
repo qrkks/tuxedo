@@ -451,6 +451,7 @@ backspace to drop them. A `/`-search filter seeds nothing.
 | `T` | open theme picker |
 | `D` | cycle density: compact → comfortable → cozy |
 | `L` | toggle line numbers |
+| `w` | toggle wrapping long tasks in the main list (`wrap_rows` in `config.toml`) |
 
 ### System
 

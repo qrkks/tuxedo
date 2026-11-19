@@ -108,7 +108,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let scroll_cell = &app.view_scroll[View::Archive.idx()];
     let scroll = keep_cursor_visible(
         scroll_cell.get(),
-        cursor_line,
+        cursor_line.map(|line| line..line + 1),
         body_area.height,
         lines.len(),
     );

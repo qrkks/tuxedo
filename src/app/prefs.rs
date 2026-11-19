@@ -35,6 +35,7 @@ pub struct Prefs {
     pub layout: Layout,
     pub show_done: bool,
     pub show_future: bool,
+    pub wrap_rows: bool,
     /// Metadata keys whose `key:value` tokens are hidden from task rows.
     /// Config-only (no in-app toggle); see `Config::hidden_keys`.
     pub hidden_keys: Vec<String>,
@@ -64,6 +65,7 @@ impl Prefs {
             },
             show_done: cfg.show_done.unwrap_or(false),
             show_future: cfg.show_future.unwrap_or(false),
+            wrap_rows: cfg.wrap_rows.unwrap_or(false),
             hidden_keys: cfg.hidden_keys,
             week_start: cfg.week_start.unwrap_or(WeekStart::Sunday),
             recurrence_builder: cfg.recurrence_builder.unwrap_or(true),
@@ -160,6 +162,7 @@ impl Prefs {
         cfg.show_status_bar = Some(self.layout.status_bar);
         cfg.show_done = Some(self.show_done);
         cfg.show_future = Some(self.show_future);
+        cfg.wrap_rows = Some(self.wrap_rows);
         cfg.hidden_keys = self.hidden_keys.clone();
         cfg.save()
     }

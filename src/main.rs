@@ -1091,6 +1091,7 @@ fn resolve_normal_key(app: &mut App, key: KeyEvent, keybinds: &KeyBindings) -> O
         KeyCode::Char('T') => Action::OpenThemePicker,
         KeyCode::Char('D') => Action::CycleDensity,
         KeyCode::Char('L') => Action::ToggleLineNum,
+        KeyCode::Char('w') => Action::ToggleWrapRows,
         KeyCode::Char('H') => Action::ToggleShowDone,
         KeyCode::Char('F') => Action::ToggleShowFuture,
         KeyCode::Esc => Action::EscapeStack,
@@ -1295,6 +1296,15 @@ fn apply_action(app: &mut App, action: Action) {
         Action::ToggleLineNum => {
             app.prefs.toggle_line_num();
             app.save_prefs();
+        }
+        Action::ToggleWrapRows => {
+            app.prefs.wrap_rows = !app.prefs.wrap_rows;
+            app.save_prefs();
+            app.flash(if app.prefs.wrap_rows {
+                "list wrapping on"
+            } else {
+                "list wrapping off"
+            });
         }
         Action::ToggleShowDone => {
             app.prefs.toggle_show_done();
