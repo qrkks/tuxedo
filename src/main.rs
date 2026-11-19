@@ -1812,7 +1812,9 @@ mod tests {
             };
             assert!(!render(&mut terminal, &app).contains("target-row"));
             let mut characters = sequence.chars();
-            let confirm = characters.next_back().unwrap();
+            let confirm = characters
+                .next_back()
+                .expect("jump sequence has a semicolon");
             for digit in characters {
                 handle_key(&mut app, key(digit), &keys);
             }
