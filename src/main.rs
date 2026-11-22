@@ -1111,20 +1111,13 @@ fn apply_action(app: &mut App, action: Action) {
     let view = app.view();
     if view != View::List {
         match action {
-            Action::ToggleComplete if view == View::Archive => {
-                if let Some(idx) = app.cur_abs() {
-                    app.unarchive(idx);
-                }
-                return;
-            }
             Action::Delete if view == View::Archive => {
                 if let Some(idx) = app.cur_abs() {
                     app.archive_delete(idx);
                 }
                 return;
             }
-            Action::ToggleComplete
-            | Action::Delete
+            Action::Delete
             | Action::BeginAdd
             | Action::BeginEdit
             | Action::BeginEditInsert
@@ -1148,12 +1141,12 @@ fn apply_action(app: &mut App, action: Action) {
                 app.flash(if view == View::Archive {
                     "read-only in archive"
                 } else {
-                    "read-only in completed view"
+                    "action unavailable in completed view"
                 });
                 return;
             }
             Action::ArchiveCompleted | Action::CreateOrOpenNote if view == View::Completed => {
-                app.flash("read-only in completed view");
+                app.flash("action unavailable in completed view");
                 return;
             }
             _ => {}
@@ -1213,10 +1206,20 @@ fn apply_action(app: &mut App, action: Action) {
             }
         }
         Action::ToggleComplete => {
-            if app.mode == Mode::Visual && !app.selection.is_empty() {
+            if view == View::List && app.mode == Mode::Visual && !app.selection.is_empty() {
                 app.complete_selected();
             } else if let Some(abs) = app.cur_abs() {
-                app.toggle_complete(abs);
+                let archive_idx = match view {
+                    View::List => None,
+                    View::Archive => Some(abs),
+                    // Completed view appends archive indices after the live tasks.
+                    View::Completed => abs.checked_sub(app.tasks().len()),
+                };
+                if let Some(idx) = archive_idx {
+                    app.unarchive(idx);
+                } else {
+                    app.toggle_complete(abs);
+                }
             }
         }
         Action::Delete => {
@@ -1722,7 +1725,7 @@ mod tests {
     }
 
     #[test]
-    fn uppercase_x_opens_read_only_completed_view() {
+    fn uppercase_x_opens_completed_view_without_list_filters() {
         let mut app = build_app();
         let first = app.cur_task_index_in_tasks().expect("live task");
         apply_action(&mut app, Action::ToggleComplete);
@@ -1735,7 +1738,6 @@ mod tests {
         apply_action(&mut app, show);
         assert_eq!(app.view(), View::Completed);
         assert_eq!(app.cur_task().map(|task| &task.raw), Some(&completed));
-        apply_action(&mut app, Action::ToggleComplete);
         apply_action(&mut app, Action::Delete);
         apply_action(&mut app, Action::ArchiveCompleted);
         apply_action(&mut app, Action::Reschedule);
@@ -1748,6 +1750,45 @@ mod tests {
         apply_action(&mut app, Action::EscapeStack);
         assert_eq!(app.view(), View::List);
         assert_eq!(app.filter().search, "unmatched");
+    }
+
+    #[test]
+    fn completed_view_x_reopens_tasks_from_both_files() {
+        let mut app = build_app_with_archive(
+            "open\nx 2026-05-05 2026-04-03 still in todo\n",
+            Some("x 2026-05-02 2026-04-02 archived task\n"),
+        );
+        let keys = KeyBindings::default();
+        handle_key(&mut app, key('X'), &keys);
+        assert_eq!(app.view(), View::Completed);
+        assert_eq!(app.visible_indices().len(), 2);
+
+        handle_key(&mut app, key('x'), &keys);
+        assert_eq!(app.visible_indices().len(), 1);
+        assert_eq!(app.archive().len(), 1);
+        assert_eq!(task_lines(&app), ["open", "2026-04-03 still in todo"]);
+
+        handle_key(&mut app, key('x'), &keys);
+        assert_eq!(app.view(), View::Completed);
+        assert!(app.visible_indices().is_empty());
+        assert!(app.archive().is_empty());
+        assert_eq!(
+            task_lines(&app),
+            [
+                "open",
+                "2026-04-03 still in todo",
+                "2026-04-02 archived task"
+            ]
+        );
+        let done_path = app.archive().path();
+        assert_eq!(
+            std::fs::read_to_string(done_path).expect("read done.txt"),
+            ""
+        );
+        assert_eq!(
+            std::fs::read_to_string(done_path.with_file_name("todo.txt")).expect("read todo.txt"),
+            "open\n2026-04-03 still in todo\n2026-04-02 archived task\n"
+        );
     }
 
     #[test]

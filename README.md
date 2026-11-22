@@ -207,9 +207,10 @@ before the originals are dropped). `a` toggles the archive view so you
 can browse, un-archive, or permanently delete past tasks.
 
 Press `X` to browse completed tasks from `todo.txt` and `done.txt` in one
-read-only view, grouped by completion date with the most recent day first.
-Tasks without a completion date appear under `unknown`. In the main list,
-`x` records today’s date when marking an open task complete.
+view, grouped by completion date with the most recent day first. Tasks without
+a completion date appear under `unknown`. Press `x` on a completed task to
+reopen it. Archived tasks move back to `todo.txt`. In the main list, `x`
+records today’s date when marking an open task complete.
 
 ## Command-line interface
 
