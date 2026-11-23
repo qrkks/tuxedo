@@ -287,7 +287,7 @@ mod tests {
         let c = Config {
             theme: Some("Nord".into()),
             density: Some(Density::Cozy),
-            sort: Some(Sort::Due),
+            sort: Some(Sort::PriorityReverseFile),
             show_left: Some(false),
             show_right: Some(true),
             show_line_num: Some(false),

@@ -5,7 +5,7 @@
 //! `recompute_visible` (which owns the visible-index cache) and the CLI's
 //! `list`/`listpri`/`listproj`/`listcon` commands reuse them.
 
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 
 use chrono::{Datelike, Days, NaiveDate};
 
@@ -82,6 +82,19 @@ pub fn sort_by_prefs(idxs: &mut [usize], tasks: &[Task], sort: Sort) {
         Sort::Priority => idxs.sort_by(cmp_priority(tasks)),
         Sort::Due => idxs.sort_by(cmp_due(tasks)),
         Sort::File => { /* preserve order */ }
+        Sort::PriorityReverseFile => idxs.sort_by_key(|&idx| {
+            let task = &tasks[idx];
+            let priority = task.priority;
+            let due = task.due.as_deref();
+            let reverse_position = (priority.is_none() && due.is_none()).then_some(Reverse(idx));
+            (
+                priority.is_none(),
+                priority,
+                due.is_none(),
+                due,
+                reverse_position,
+            )
+        }),
     }
 }
 
@@ -362,6 +375,21 @@ mod tests {
         let needle = resolved("due:+1w groceries", "2026-07-28");
         assert!(passes_user_filter(&tasks[0], &filter, Some(&needle)));
         assert!(!passes_user_filter(&tasks[1], &filter, Some(&needle)));
+    }
+
+    #[test]
+    fn priority_reverse_file_reverses_only_tasks_without_priority_or_due() {
+        let tasks = crate::todo::parse_file(
+            "older plain\n(B) priority B\nlater deadline due:2026-06-20\n\
+             (A) same first due:2026-06-01\n(Z) priority Z\n\
+             2025-01-01 newer plain by file position\n(A) same second due:2026-06-01\n\
+             earlier deadline due:2026-06-01\nnewest plain +work\n",
+        );
+        let mut indices: Vec<usize> = (0..tasks.len()).collect();
+
+        sort_by_prefs(&mut indices, &tasks, Sort::PriorityReverseFile);
+
+        assert_eq!(indices, [3, 6, 1, 4, 7, 2, 8, 5, 0]);
     }
 
     #[test]

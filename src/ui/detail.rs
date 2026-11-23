@@ -81,7 +81,10 @@ fn build_lines<'a>(
                 Span::styled(" due       ", Style::default().fg(theme.dim)),
                 Span::styled(due.as_str(), Style::default().fg(theme.fg)),
                 Span::raw("  "),
-                Span::styled(due_label(due, today), Style::default().fg(theme.overdue)),
+                Span::styled(
+                    due_label(due, today),
+                    due_token_style(t.done, due, today, theme),
+                ),
             ],
         ));
     }
@@ -377,5 +380,42 @@ mod tests {
             span.style.fg == Some(MUTED.accent)
                 && !span.style.add_modifier.contains(Modifier::UNDERLINED)
         }));
+    }
+
+    #[test]
+    fn due_status_in_detail_uses_the_task_due_colors() {
+        let today = "2026-11-23";
+        for (raw, label, color, bold) in [
+            ("sample due:2026-11-22", "overdue 1d", MUTED.overdue, true),
+            ("sample due:2026-11-23", "today", MUTED.today, true),
+            ("sample due:2026-11-24", "tomorrow", MUTED.due, false),
+            ("sample due:2026-11-25", "in 2d", MUTED.due, false),
+            ("sample due:2026-11-26", "in 3d", MUTED.dim, false),
+            (
+                "x 2026-11-23 2026-11-22 sample due:2026-11-23",
+                "today",
+                MUTED.done,
+                true,
+            ),
+        ] {
+            let task = parse_line(raw).unwrap();
+            let lines = build_lines(&MUTED, Some(&task), today, 60);
+            let status = lines
+                .iter()
+                .find(|line| {
+                    line.spans
+                        .first()
+                        .is_some_and(|span| span.content == " due       ")
+                })
+                .and_then(|line| line.spans.last())
+                .expect("due status in the detail pane");
+            assert_eq!(status.content, label, "{raw}");
+            assert_eq!(status.style.fg, Some(color), "{raw}");
+            assert_eq!(
+                status.style.add_modifier.contains(Modifier::BOLD),
+                bold,
+                "{raw}"
+            );
+        }
     }
 }

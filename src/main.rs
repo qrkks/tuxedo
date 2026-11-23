@@ -2156,6 +2156,33 @@ mod tests {
     }
 
     #[test]
+    fn priority_reverse_file_cycles_after_file_order_and_moves_rows_visually() {
+        let raw = "old task\n(A) priority task\nnew task\n";
+        let mut app = build_app_with_archive(raw, None);
+        app.prefs.sort = Sort::File;
+
+        app.prefs.cycle_sort();
+        app.recompute_visible();
+        assert_eq!(app.sort_label(), "pri+revfile");
+        assert_eq!(app.visible_indices(), &[1, 2, 0]);
+        assert_eq!(
+            task_lines(&app),
+            ["old task", "(A) priority task", "new task"]
+        );
+
+        apply_action(&mut app, Action::CursorDown);
+        apply_action(&mut app, Action::MoveTaskDown);
+        assert_eq!(app.cursor, 2);
+        assert_eq!(
+            task_lines(&app),
+            ["new task", "(A) priority task", "old task"]
+        );
+
+        app.prefs.cycle_sort();
+        assert_eq!(app.prefs.sort, Sort::Priority);
+    }
+
+    #[test]
     fn task_movement_preserves_priority_due_fallback() {
         let mut app = build_app_with_archive(
             "(A) later due:2026-06-20\n(A) sooner due:2026-06-01\n",

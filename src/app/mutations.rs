@@ -17,7 +17,7 @@ use crate::todo::Task;
 
 fn same_sort_key(sort: Sort, a: &Task, b: &Task) -> bool {
     match sort {
-        Sort::Priority => a.priority == b.priority && a.due == b.due,
+        Sort::Priority | Sort::PriorityReverseFile => a.priority == b.priority && a.due == b.due,
         Sort::Due => a.due == b.due,
         Sort::File => true,
     }
@@ -127,7 +127,7 @@ impl App {
         if swaps.is_empty() {
             if moving.iter().any(|&selected| selected) {
                 self.flash(match self.prefs.sort {
-                    Sort::Priority => "edge of priority/due group",
+                    Sort::Priority | Sort::PriorityReverseFile => "edge of priority/due group",
                     Sort::Due => "edge of due-date group",
                     Sort::File => "edge of list",
                 });

@@ -75,6 +75,7 @@ pub enum Sort {
     Priority,
     Due,
     File,
+    PriorityReverseFile,
 }
 
 impl Sort {
@@ -83,6 +84,7 @@ impl Sort {
             Sort::Priority => "priority",
             Sort::Due => "due",
             Sort::File => "file",
+            Sort::PriorityReverseFile => "pri+revfile",
         }
     }
 }
@@ -100,6 +102,7 @@ impl FromStr for Sort {
             "priority" => Ok(Sort::Priority),
             "due" => Ok(Sort::Due),
             "file" => Ok(Sort::File),
+            "pri+revfile" => Ok(Sort::PriorityReverseFile),
             _ => Err(()),
         }
     }

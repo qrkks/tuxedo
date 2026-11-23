@@ -112,7 +112,8 @@ impl Prefs {
         self.sort = match self.sort {
             Sort::Priority => Sort::Due,
             Sort::Due => Sort::File,
-            Sort::File => Sort::Priority,
+            Sort::File => Sort::PriorityReverseFile,
+            Sort::PriorityReverseFile => Sort::Priority,
         };
         format!("sort: {}", self.sort)
     }

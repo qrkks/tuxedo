@@ -63,7 +63,7 @@ impl App {
 
         let groups: Vec<GroupKey> = match self.prefs.sort {
             Sort::File => vec![GroupKey::None; idxs.len()],
-            Sort::Priority => idxs
+            Sort::Priority | Sort::PriorityReverseFile => idxs
                 .iter()
                 .map(|&i| GroupKey::ListPriority(tasks[i].priority))
                 .collect(),
