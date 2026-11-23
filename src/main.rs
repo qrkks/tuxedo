@@ -1755,8 +1755,8 @@ mod tests {
     #[test]
     fn completed_view_x_reopens_tasks_from_both_files() {
         let mut app = build_app_with_archive(
-            "open\nx 2026-05-05 2026-04-03 still in todo\n",
-            Some("x 2026-05-02 2026-04-02 archived task\n"),
+            "open pri:A\nx 2026-05-05 2026-04-03 still in todo pri:B\n",
+            Some("x 2026-05-02 2026-04-02 archived task pri:A\n"),
         );
         let keys = KeyBindings::default();
         handle_key(&mut app, key('X'), &keys);
@@ -1766,7 +1766,10 @@ mod tests {
         handle_key(&mut app, key('x'), &keys);
         assert_eq!(app.visible_indices().len(), 1);
         assert_eq!(app.archive().len(), 1);
-        assert_eq!(task_lines(&app), ["open", "2026-04-03 still in todo"]);
+        assert_eq!(
+            task_lines(&app),
+            ["open pri:A", "(B) 2026-04-03 still in todo"]
+        );
 
         handle_key(&mut app, key('x'), &keys);
         assert_eq!(app.view(), View::Completed);
@@ -1775,9 +1778,9 @@ mod tests {
         assert_eq!(
             task_lines(&app),
             [
-                "open",
-                "2026-04-03 still in todo",
-                "2026-04-02 archived task"
+                "open pri:A",
+                "(B) 2026-04-03 still in todo",
+                "(A) 2026-04-02 archived task"
             ]
         );
         let done_path = app.archive().path();
@@ -1787,8 +1790,28 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(done_path.with_file_name("todo.txt")).expect("read todo.txt"),
-            "open\n2026-04-03 still in todo\n2026-04-02 archived task\n"
+            "open pri:A\n(B) 2026-04-03 still in todo\n(A) 2026-04-02 archived task\n"
         );
+        app.prefs.sort = Sort::Priority;
+        app.set_view(View::List);
+        assert_eq!(app.visible_indices(), [2, 1, 0]);
+    }
+
+    #[test]
+    fn undo_restores_priority_after_completion() {
+        let raw = "(B) 2026-04-03 report pri:A";
+        let mut app = build_app_with_archive(&format!("{raw}\n"), None);
+        let keys = KeyBindings::default();
+
+        handle_key(&mut app, key('x'), &keys);
+        assert_eq!(
+            task_lines(&app),
+            ["x 2026-05-06 2026-04-03 report pri:A tuxedo-pri:B"]
+        );
+
+        handle_key(&mut app, key('u'), &keys);
+        assert_eq!(task_lines(&app), [raw]);
+        assert_eq!(app.tasks()[0].priority, Some('B'));
     }
 
     #[test]

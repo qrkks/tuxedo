@@ -335,6 +335,40 @@ mod tests {
     }
 
     #[test]
+    fn archived_priority_survives_reload_and_reopen() {
+        use crate::core::outcome::CompleteOutcome;
+
+        let dir = dir_for("priority-reopen");
+        let todo_path = dir.join("todo.txt");
+        let done_path = dir.join("done.txt");
+        let raw = "(A) 2026-08-21 问索赔额差异\n";
+        std::fs::write(&todo_path, raw).unwrap();
+        let mut store = Store::open_sync(todo_path.clone(), raw.to_owned(), "2026-11-23".into());
+        assert!(matches!(
+            store.toggle_complete(0),
+            CompleteOutcome::Completed { .. }
+        ));
+        assert!(matches!(
+            store.archive_completed(),
+            ArchiveOutcome::Archived { count: 1 }
+        ));
+        assert_eq!(
+            std::fs::read_to_string(&done_path).unwrap(),
+            "x 2026-11-23 2026-08-21 问索赔额差异 pri:A\n"
+        );
+        drop(store);
+
+        let live_text = std::fs::read_to_string(&todo_path).unwrap();
+        let mut store = Store::open_sync(todo_path.clone(), live_text, "2026-11-24".into());
+        assert_eq!(store.archive().len(), 1);
+        assert!(matches!(store.unarchive(0), UnarchiveOutcome::Unarchived));
+        assert_eq!(store.tasks()[0].priority, Some('A'));
+        assert_eq!(std::fs::read_to_string(&todo_path).unwrap(), raw);
+        assert_eq!(std::fs::read_to_string(&done_path).unwrap(), "");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn archive_appends_to_existing_done_file() {
         let dir = dir_for("append");
         let todo_path = dir.join("todo.txt");

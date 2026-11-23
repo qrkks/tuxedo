@@ -32,7 +32,6 @@ const LEFT_PANE_W: u16 = 26;
 const RIGHT_PANE_W: u16 = 34;
 const MIN_BODY_W: u16 = 40;
 
-const DIALOG_H: u16 = 8;
 const DIALOG_MIN_W: u16 = 40;
 const DIALOG_MAX_W: u16 = 100;
 
@@ -108,9 +107,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             let dlg_w: u16 = (u32::from(center_area.width) * 4 / 5)
                 .clamp(u32::from(DIALOG_MIN_W), u32::from(DIALOG_MAX_W))
                 as u16;
-            let dlg = centered_in(area, dlg_w, DIALOG_H);
-            frame.render_widget(Clear, dlg);
-            dialog::render(frame, dlg, app);
+            let dlg = dialog::render(frame, area, dlg_w, app);
             // At most one overlay shows at a time. The autocomplete popup is
             // suppressed while a metadata picker is open so we don't stack
             // two floating panels in the same spot.

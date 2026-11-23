@@ -26,6 +26,35 @@ pub(super) fn unicode_word_parts(word: &str) -> impl Iterator<Item = (&str, usiz
         })
 }
 
+/// Wrap editable text into contiguous byte ranges, preserving the spaces
+/// at row boundaries so every insertion point has a display position.
+pub(super) fn draft_row_ranges(text: &str, width: usize) -> Vec<Range<usize>> {
+    let mut rows = Vec::new();
+    let mut start = 0;
+    let mut end = 0;
+    let mut cells = 0;
+    let mut push = |part: &str, part_width| {
+        if cells + part_width > width && start < end {
+            rows.push(start..end);
+            start = end;
+            cells = 0;
+        }
+        end += part.len();
+        cells += part_width;
+    };
+    for (part, part_width) in unicode_word_parts(text) {
+        if part_width <= width {
+            push(part, part_width);
+        } else {
+            for grapheme in part.graphemes(true) {
+                push(grapheme, grapheme.width());
+            }
+        }
+    }
+    rows.push(start..end);
+    rows
+}
+
 /// The visible byte ranges for each wrapped line of a styled task body.
 pub(super) fn row_ranges(text: &str, width: usize) -> Vec<Range<usize>> {
     let mut rows = Vec::new();

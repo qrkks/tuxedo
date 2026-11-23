@@ -207,6 +207,66 @@ fn find_quoted_kv(s: &str, key: &str) -> Vec<String> {
     rest[..end].split(". ").map(str::to_owned).collect()
 }
 
+#[derive(Default)]
+struct CompletionPriorityTags<'a> {
+    pri: Option<(usize, &'a str)>,
+    duplicate_pri: bool,
+    tuxedo_pri: Option<(usize, &'a str)>,
+}
+
+impl<'a> CompletionPriorityTags<'a> {
+    fn standard_priority(&self) -> Option<(usize, &'a str)> {
+        self.pri.filter(|(_, token)| {
+            !self.duplicate_pri
+                && token
+                    .strip_prefix("pri:")
+                    .and_then(priority_letter)
+                    .is_some()
+        })
+    }
+}
+
+fn priority_letter(value: &str) -> Option<char> {
+    match value.as_bytes() {
+        [letter] if letter.is_ascii_uppercase() => Some(char::from(*letter)),
+        _ => None,
+    }
+}
+
+fn completion_priority_tags(body: &str) -> CompletionPriorityTags<'_> {
+    let mut tags = CompletionPriorityTags::default();
+    let mut rest = body.trim_start();
+    while !rest.is_empty() {
+        let offset = body.len() - rest.len();
+        let head_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let mut end = head_end;
+        // Consume quoted fields together so note:"See pri:B" has no pri tag.
+        if let Some((key, value)) = rest[..head_end].split_once(':')
+            && is_valid_key(key)
+            && value.starts_with('"')
+        {
+            let quoted = &rest[key.len() + 2..];
+            if let Some(close) = quoted.find('"') {
+                let after_quote = &quoted[close + 1..];
+                let after_field = after_quote.trim_start_matches(|c: char| !c.is_whitespace());
+                end = rest.len() - after_field.len();
+            }
+        }
+        let (token, after) = rest.split_at(end);
+        match token.split_once(':') {
+            Some(("pri", _)) => {
+                tags.duplicate_pri |= tags.pri.replace((offset, token)).is_some();
+            }
+            Some(("tuxedo-pri", value)) if value == "none" || priority_letter(value).is_some() => {
+                tags.tuxedo_pri = Some((offset, token));
+            }
+            _ => {}
+        }
+        rest = after.trim_start();
+    }
+    tags
+}
+
 fn is_valid_key(k: &str) -> bool {
     let mut chars = k.chars();
     let Some(first) = chars.next() else {
@@ -241,44 +301,71 @@ pub fn write_atomic(path: &Path, body: &str) -> std::io::Result<()> {
 
 impl Task {
     /// Mark this task complete as of `today`. No-op if already done.
-    /// The serialized line follows todo.txt convention: `x DONE CREATED BODY`,
-    /// where `BODY` has had any leading priority/created-date stripped. If the
-    /// task carried no creation date, `today` is used so the line stays well-
-    /// formed.
+    /// Use today's date when the task has no creation date, and save any
+    /// leading priority as todo.txt completion metadata.
     pub fn mark_done(&mut self, today: &str) -> Result<(), ParseError> {
         if self.done {
             return Ok(());
         }
-        let created = self
-            .created_date
-            .clone()
-            .unwrap_or_else(|| today.to_string());
+        let created = self.created_date.as_deref().unwrap_or(today);
         let body = body_after_priority(&self.raw);
-        let new_raw = format!("x {today} {created} {body}");
+        let tags = completion_priority_tags(body);
+        let needs_tuxedo_tag = tags.tuxedo_pri.is_some()
+            || tags.standard_priority().is_some()
+            || (self.priority.is_some() && tags.pri.is_some());
+        let priority_tag = if needs_tuxedo_tag {
+            // Preserve existing fields. The last Tuxedo tag records the
+            // original prefix, including when the task had no prefix.
+            Some(match self.priority {
+                Some(p) => format!("tuxedo-pri:{p}"),
+                None => "tuxedo-pri:none".to_owned(),
+            })
+        } else {
+            self.priority.map(|p| format!("pri:{p}"))
+        };
+        let mut new_raw = format!("x {today} {created} {body}");
+        if let Some(tag) = priority_tag {
+            new_raw.truncate(new_raw.trim_end().len());
+            new_raw.push(' ');
+            new_raw.push_str(&tag);
+        }
         self.replace_from_raw(&new_raw)
     }
 
-    /// Reverse `mark_done`: drop the leading `x ` and the done-date token.
-    /// Priority that was stripped at completion time is not recovered — the
-    /// user can re-set it after un-archiving.
+    /// Reopen the task and restore a priority saved at completion.
     pub fn unmark_done(&mut self) -> Result<(), ParseError> {
         if !self.done {
             return Ok(());
         }
-        let after_x = self.raw.strip_prefix("x ").unwrap_or(&self.raw);
-        let body = if self.done_date.is_some() {
-            // mark_done emits "x DONE_DATE CREATED BODY". Drop the 10-char
-            // date plus its trailing space.
-            let bytes = after_x.as_bytes();
-            if bytes.len() >= 11 && (bytes[10] == b' ' || bytes[10] == b'\t') {
-                after_x[11..].trim_start().to_string()
-            } else {
-                after_x.to_string()
-            }
-        } else {
-            after_x.to_string()
+        let after_x = strip_prefix_x(&self.raw).unwrap_or(&self.raw);
+        let body = match take_iso_date_prefix(after_x) {
+            Some((_, rest)) if !rest.is_empty() => rest,
+            _ => after_x,
+        }
+        .to_owned();
+
+        // A completed task from another client may have a priority prefix.
+        if take_priority_prefix(&body).is_some() {
+            return self.replace_from_raw(&body);
+        }
+
+        let tags = completion_priority_tags(&body);
+        let Some((offset, token)) = tags.tuxedo_pri.or_else(|| tags.standard_priority()) else {
+            return self.replace_from_raw(&body);
         };
-        self.replace_from_raw(&body)
+        let before = body[..offset].trim_end();
+        let after = &body[offset + token.len()..];
+        let remaining = format!("{before}{after}");
+        if remaining.trim().is_empty() {
+            return self.replace_from_raw(&body);
+        }
+        let priority = token
+            .split_once(':')
+            .and_then(|(_, value)| priority_letter(value));
+        match priority {
+            Some(p) => self.replace_from_raw(&format!("({p}) {}", remaining.trim_start())),
+            None => self.replace_from_raw(&remaining),
+        }
     }
 
     /// Set or clear this task's priority. The priority byte is replaced in
@@ -570,6 +657,97 @@ mod tests {
         assert_eq!(t.contexts, vec!["phone"]);
         assert!(!t.done);
         assert_eq!(t.rec, None);
+    }
+
+    #[test]
+    fn completion_priority_round_trips_through_serialization() {
+        let cases = [
+            (
+                "(A) 2026-08-21 问索赔额差异",
+                "x 2026-11-23 2026-08-21 问索赔额差异 pri:A",
+            ),
+            ("2026-08-21 无优先级", "x 2026-11-23 2026-08-21 无优先级"),
+            (
+                "(A) 2026-08-21 已有 pri:B +work",
+                "x 2026-11-23 2026-08-21 已有 pri:B +work tuxedo-pri:A",
+            ),
+            (
+                "(A) 2026-08-21 已有 pri:A",
+                "x 2026-11-23 2026-08-21 已有 pri:A tuxedo-pri:A",
+            ),
+            (
+                "2026-08-21 已有 pri:A",
+                "x 2026-11-23 2026-08-21 已有 pri:A tuxedo-pri:none",
+            ),
+            (
+                "(Z) 2026-08-21 已有 pri:bad pri:B",
+                "x 2026-11-23 2026-08-21 已有 pri:bad pri:B tuxedo-pri:Z",
+            ),
+            (
+                r#"(B) 2026-08-21 复查  note:"引用 pri:A 原文" @office"#,
+                r#"x 2026-11-23 2026-08-21 复查  note:"引用 pri:A 原文" @office pri:B"#,
+            ),
+            (
+                "(C) 2026-08-21 已有 tuxedo-pri:A",
+                "x 2026-11-23 2026-08-21 已有 tuxedo-pri:A tuxedo-pri:C",
+            ),
+        ];
+
+        for (raw, completed) in cases {
+            let mut task = parse_line(raw).unwrap();
+            let priority = task.priority;
+            task.mark_done("2026-11-23").unwrap();
+            assert_eq!(task.raw, completed);
+            assert!(task.done);
+            assert_eq!(task.priority, None);
+            task.mark_done("2026-11-24").unwrap();
+            assert_eq!(task.raw, completed);
+
+            let mut task = parse_file(&serialize(&[task])).pop().unwrap();
+            task.unmark_done().unwrap();
+            assert_eq!(task.raw, raw);
+            assert!(!task.done);
+            assert_eq!(task.priority, priority);
+        }
+    }
+
+    #[test]
+    fn reopens_external_completed_priority_formats() {
+        let cases = [
+            (
+                "x\t2026-11-23 2026-08-21 Review pri:B +work",
+                "(B) 2026-08-21 Review +work",
+            ),
+            (
+                "x 2026-11-23 (A) 2026-08-21 Review pri:B",
+                "(A) 2026-08-21 Review pri:B",
+            ),
+            (
+                "x 2026-11-23 2026-08-21 Review pri:A pri:B",
+                "2026-08-21 Review pri:A pri:B",
+            ),
+            (
+                "x 2026-11-23 2026-08-21 Review pri:unknown",
+                "2026-08-21 Review pri:unknown",
+            ),
+        ];
+        for (raw, reopened) in cases {
+            let mut task = parse_line(raw).unwrap();
+            task.unmark_done().unwrap();
+            assert_eq!(task.raw, reopened);
+        }
+
+        let open = parse_line("2026-08-21 Review pri:A").unwrap();
+        assert_eq!(open.priority, None);
+    }
+
+    #[test]
+    fn completes_undated_task_and_restores_priority() {
+        let mut task = parse_line("(A) Review").unwrap();
+        task.mark_done("2026-11-23").unwrap();
+        assert_eq!(task.raw, "x 2026-11-23 2026-11-23 Review pri:A");
+        task.unmark_done().unwrap();
+        assert_eq!(task.raw, "(A) 2026-11-23 Review");
     }
 
     #[test]

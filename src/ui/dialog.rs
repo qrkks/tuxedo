@@ -1,13 +1,21 @@
+use std::ops::Range;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::app::{
     App, BuilderField, CalendarTarget, DraftOverlay, Mode, REC_UNIT_ORDER, TokenKind, WeekStart,
 };
 use crate::theme::Theme;
+
+use super::wrap::{cell_width, draft_row_ranges};
+
+const DIALOG_HEIGHT: u16 = 8;
+const INPUT_PREFIX_WIDTH: u16 = 4;
 
 /// Classifier output: byte range + what kind of token lives there. Segments
 /// cover the input contiguously and don't overlap.
@@ -165,44 +173,40 @@ fn is_kv_key(k: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-/// Syntax-highlighted draft with cursor inversion. Walks `classify_draft`
-/// and emits one styled span per segment, splitting whichever segment
-/// contains the cursor so its glyph stays readable with swapped fg/bg.
-pub(crate) fn highlighted_draft_spans<'a>(
+/// Keep token styles across soft wrap boundaries and invert the cursor glyph.
+fn highlighted_draft_line<'a>(
     draft: &'a str,
-    cursor: usize,
+    row: &Range<usize>,
+    cursor: &Range<usize>,
+    segments: &[(Range<usize>, SegmentKind)],
     theme: &Theme,
-) -> Vec<Span<'a>> {
-    let segments = classify_draft(draft);
-    let cursor = cursor.min(draft.len());
-    let mut out: Vec<Span<'a>> = Vec::new();
-
-    for (range, kind) in segments {
-        let style = segment_style(kind, theme);
-        if cursor >= range.start && cursor < range.end {
-            let before = &draft[range.start..cursor];
-            let next = next_boundary(draft, cursor);
-            let cursor_char = &draft[cursor..next];
-            let after = &draft[next..range.end];
-            if !before.is_empty() {
-                out.push(Span::styled(before, style));
-            }
-            // Invert: glyph fg = panel bg, glyph bg = segment colour.
-            let fg = style.fg.unwrap_or(theme.fg);
-            let inv = Style::default().fg(theme.panel).bg(fg);
-            out.push(Span::styled(cursor_char, inv));
-            if !after.is_empty() {
-                out.push(Span::styled(after, style));
-            }
+) -> Line<'a> {
+    let mut line = Line::default();
+    let first = segments.partition_point(|(range, _)| range.end <= row.start);
+    for (range, kind) in &segments[first..] {
+        if range.start >= row.end {
+            break;
+        }
+        let start = range.start.max(row.start);
+        let end = range.end.min(row.end);
+        let style = segment_style(*kind, theme);
+        if cursor.is_empty() || cursor.end <= start || cursor.start >= end {
+            line.push_span(Span::styled(&draft[start..end], style));
         } else {
-            out.push(Span::styled(&draft[range.start..range.end], style));
+            if start < cursor.start {
+                line.push_span(Span::styled(&draft[start..cursor.start], style));
+            }
+            if start <= cursor.start {
+                let fg = style.fg.unwrap_or(theme.fg);
+                let inverted = Style::default().fg(theme.panel).bg(fg);
+                line.push_span(Span::styled(&draft[cursor.clone()], inverted));
+            }
+            if cursor.end < end {
+                line.push_span(Span::styled(&draft[cursor.end..end], style));
+            }
         }
     }
-
-    if cursor == draft.len() {
-        out.push(Span::styled("█", Style::default().fg(theme.fg)));
-    }
-    out
+    line
 }
 
 fn segment_style(kind: SegmentKind, theme: &Theme) -> Style {
@@ -221,15 +225,6 @@ fn segment_style(kind: SegmentKind, theme: &Theme) -> Style {
     } else {
         s
     }
-}
-
-fn next_boundary(s: &str, i: usize) -> usize {
-    let len = s.len();
-    let mut j = (i + 1).min(len);
-    while j < len && !s.is_char_boundary(j) {
-        j += 1;
-    }
-    j
 }
 
 /// Render `draft` with the insertion point highlighted at byte offset `cursor`.
@@ -262,8 +257,38 @@ pub fn draft_cursor_spans<'a>(
     }
 }
 
-pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+pub(super) fn render(frame: &mut Frame, screen: Rect, width: u16, app: &App) -> Rect {
     let theme = app.theme();
+    let draft = app.draft.text();
+    let cursor = app.draft.cursor();
+    let inner_width = width.min(screen.width).saturating_sub(2);
+    let prefix_width = INPUT_PREFIX_WIDTH.min(inner_width.saturating_sub(2));
+    let wrap_width = usize::from(inner_width - prefix_width).max(1);
+    let mut rows = draft_row_ranges(draft, wrap_width);
+    // Reserve a cell for the insertion point after a full final row.
+    if rows
+        .last()
+        .is_some_and(|last| cell_width(&draft[last.clone()]) >= wrap_width)
+    {
+        rows.push(draft.len()..draft.len());
+    }
+    let cursor_row = rows
+        .partition_point(|row| row.end <= cursor)
+        .min(rows.len() - 1);
+    let row = &rows[cursor_row];
+    let cursor_grapheme = draft[row.clone()]
+        .grapheme_indices(true)
+        .map(|(offset, glyph)| row.start + offset..row.start + offset + glyph.len())
+        .find(|range| cursor < range.end)
+        .unwrap_or(cursor..cursor);
+
+    // Leave room for floating pickers. When the input grows beyond this
+    // height, move the visible row range to keep the cursor in view.
+    let max_height = (screen.height / 2).max(DIALOG_HEIGHT + 2);
+    let height = (rows.len() + usize::from(DIALOG_HEIGHT - 1)).min(usize::from(max_height));
+    let area = super::centered_in(screen, width, height as u16);
+    frame.render_widget(Clear, area);
+
     let title = if app.selection.editing().is_some() {
         " EDIT TASK "
     } else {
@@ -284,7 +309,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     let [_p1, input_area, preview_area, _p2, hint_area, _p3] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Min(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -292,14 +317,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     ])
     .areas(inner);
 
-    // Split the input row into a fixed prefix ("  › ") and a scrollable
-    // content area. Without this, long drafts get clipped at the dialog's
-    // right edge — including the cursor itself, so the user can't see what
-    // they're typing. The prefix never scrolls; the content paragraph offsets
-    // horizontally to keep the cursor onscreen.
-    const PREFIX_W: u16 = 4;
     let [prefix_area, content_area] =
-        Layout::horizontal([Constraint::Length(PREFIX_W), Constraint::Min(0)]).areas(input_area);
+        Layout::horizontal([Constraint::Length(prefix_width), Constraint::Min(0)])
+            .areas(input_area);
 
     let prefix_line = Line::from(vec![
         Span::raw("  "),
@@ -316,27 +336,24 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         prefix_area,
     );
 
-    let content_line = Line::from(highlighted_draft_spans(
-        app.draft.text(),
-        app.draft.cursor(),
-        theme,
-    ))
-    .style(Style::default().bg(theme.panel));
-    let cursor = app.draft.cursor().min(app.draft.text().len());
-    let cursor_col = app.draft.text()[..cursor].chars().count();
-    let avail = content_area.width as usize;
-    // Pin the cursor to the rightmost visible column whenever it would
-    // otherwise overflow. Stateless: when the cursor moves left of the
-    // viewport, scroll naturally drops back to 0.
-    let scroll_x = if avail == 0 {
-        0
-    } else {
-        cursor_col.saturating_sub(avail.saturating_sub(1)) as u16
-    };
+    let visible_rows = usize::from(content_area.height);
+    let first_row = cursor_row.saturating_sub(visible_rows.saturating_sub(1));
+    let segments = classify_draft(draft);
+    let content = rows
+        .iter()
+        .enumerate()
+        .skip(first_row)
+        .take(visible_rows)
+        .map(|(idx, row)| {
+            let mut line = highlighted_draft_line(draft, row, &cursor_grapheme, &segments, theme);
+            if cursor == draft.len() && idx + 1 == rows.len() {
+                line.push_span(Span::styled("█", Style::default().fg(theme.fg)));
+            }
+            line
+        })
+        .collect::<Vec<_>>();
     frame.render_widget(
-        Paragraph::new(content_line)
-            .style(Style::default().bg(theme.panel))
-            .scroll((0, scroll_x)),
+        Paragraph::new(content).style(Style::default().bg(theme.panel)),
         content_area,
     );
 
@@ -351,6 +368,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         Paragraph::new(hint).style(Style::default().bg(theme.panel)),
         hint_area,
     );
+    area
 }
 
 fn preview_line<'a>(app: &App) -> Line<'a> {
@@ -1252,6 +1270,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
 
     use crate::app::{App, Mode};
     use crate::config::Config;
@@ -1454,31 +1473,55 @@ mod tests {
         out
     }
 
+    fn draw_edit_dialog(terminal: &mut Terminal<TestBackend>, app: &App) -> Rect {
+        let mut area = Rect::default();
+        terminal
+            .draw(|f| area = super::render(f, f.area(), 24, app))
+            .unwrap();
+        area
+    }
+
     #[test]
-    fn input_row_scrolls_to_keep_cursor_visible_for_long_draft() {
-        // A draft longer than the dialog's content area must scroll
-        // horizontally so the tail (where the cursor sits) stays visible —
-        // otherwise the user can't see what they're typing past the right
-        // edge.
-        let tail = "ZZSCROLLTAIL";
-        let draft = format!("{}{}", "x".repeat(80), tail);
-        let app = build_insert_app("plain\n", &draft);
-        let backend = TestBackend::new(80, 30);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| crate::ui::draw(f, &app)).unwrap();
+    fn input_wraps_cjk_and_keeps_the_cursor_after_a_full_row() {
+        let draft = format!("{}文", "中".repeat(17));
+        let mut app = build_insert_app("edit cjk\n", &draft);
+        app.selection.enter_edit(0);
+        let mut terminal = Terminal::new(TestBackend::new(40, 30)).unwrap();
+        let area = draw_edit_dialog(&mut terminal, &app);
+        let x = area.x + 5;
+        let y = area.y + 2;
         let buf = terminal.backend().buffer();
-        // Dialog is 8 rows tall, centered in a 30-row area; input lives on
-        // the second inner row (top border + 1 row padding + input).
-        let dlg_y = (30u16 - 8) / 2;
-        let input_y = dlg_y + 2;
-        let mut row = String::new();
-        for x in 0..80 {
-            row.push_str(buf[(x, input_y)].symbol());
-        }
-        assert!(
-            row.contains(tail),
-            "input row should scroll so the cursor end ({tail}) stays visible:\n{row}"
-        );
+        assert_eq!(buf[(x + 16, y)].symbol(), "中");
+        assert_eq!(buf[(x, y + 1)].symbol(), "中");
+        assert_eq!(buf[(x + 16, y + 1)].symbol(), "文");
+        assert_eq!(buf[(x, y + 2)].symbol(), "█");
+
+        app.draft_left();
+        assert_eq!(draw_edit_dialog(&mut terminal, &app), area);
+        let cursor_cell = &terminal.backend().buffer()[(x + 16, y + 1)];
+        assert_eq!(cursor_cell.symbol(), "文");
+        assert_eq!(cursor_cell.bg, app.theme().fg);
+        assert_eq!(app.draft.text(), draft);
+    }
+
+    #[test]
+    fn long_wrapped_input_follows_the_cursor_vertically() {
+        let draft = format!("开头{}结束", "中".repeat(96));
+        let mut app = build_insert_app("edit long task\n", &draft);
+        let mut terminal = Terminal::new(TestBackend::new(40, 14)).unwrap();
+        let area = draw_edit_dialog(&mut terminal, &app);
+        let x = area.x + 5;
+        let y = area.y + 2;
+        let buf = terminal.backend().buffer();
+        assert_eq!(buf[(x, y + 2)].symbol(), "束");
+        assert_eq!(buf[(x + 2, y + 2)].symbol(), "█");
+
+        app.draft_home();
+        assert_eq!(draw_edit_dialog(&mut terminal, &app), area);
+        let buf = terminal.backend().buffer();
+        assert_eq!(buf[(x, y)].symbol(), "开");
+        assert_eq!(buf[(x, y)].bg, app.theme().fg);
+        assert_eq!(buf[(x + 2, y)].symbol(), "头");
     }
 
     #[test]
